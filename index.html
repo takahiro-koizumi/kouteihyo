@@ -480,6 +480,35 @@
   /* Print split layout (top/bottom halves) */
   .print-split-sep { display: none; }
 
+  /* On-screen split view (上下表示 toggle) */
+  #btn-split-view.active {
+    background: #2563eb;
+    color: #fff;
+    border-color: #1d4ed8;
+  }
+  .screen-split-half { position: relative; }
+  .screen-split-top {
+    border-bottom: 2px dashed #888;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+  }
+  .screen-split-top::after,
+  .screen-split-bottom::after {
+    position: absolute;
+    right: 8px;
+    top: 4px;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid #ccc;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: #555;
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .screen-split-top::after { content: '前半'; }
+  .screen-split-bottom::after { content: '後半'; }
+
   /* Print */
   @media print {
     .toolbar, .modal-back, .ctx-menu { display: none !important; }
@@ -591,6 +620,7 @@
     <span class="spacer"></span>
 
     <button id="btn-fit-period" title="工期に合わせて表示">⤢工期</button>
+    <button id="btn-split-view" title="上下表示 — 工期を前半/後半の2段に分割して全体を1画面表示">⇅ 上下</button>
     <button id="btn-export" title="JSONエクスポート">↓</button>
     <button id="btn-import" title="JSONインポート">↑</button>
     <button id="btn-save" title="保存">💾</button>
@@ -2301,6 +2331,94 @@ window.addEventListener('afterprint', () => {
 
 document.getElementById('btn-print').onclick = () => window.print();
 document.getElementById('btn-settings').onclick = () => openSettingsModal();
+
+// ====================================================================
+// 上下表示（画面上で工期を前半・後半の2段に分割するトグル）
+// 印刷モードと同じ分割ロジックを画面でも使える形にしたもの
+// ====================================================================
+let _splitView = false;
+let _splitRestoreView = null;
+let _applyingSplit = false;
+
+const _origRenderForSplit = render;
+render = function() {
+  if (_applyingSplit) { _origRenderForSplit(); return; }
+  if (!_splitView) { _origRenderForSplit(); return; }
+  applySplitToWrap();
+};
+
+function applySplitToWrap() {
+  const p = currentProject();
+  if (!p || !p.start || !p.end) { _origRenderForSplit(); return; }
+  const ps = parseYMD(p.start), pe = parseYMD(p.end);
+  if (!ps || !pe) { _origRenderForSplit(); return; }
+
+  _applyingSplit = true;
+  try {
+    const totalMonths = (pe.getFullYear() - ps.getFullYear()) * 12 + (pe.getMonth() - ps.getMonth()) + 1;
+    const topMonths = Math.ceil(totalMonths / 2);
+    const bottomMonths = Math.max(1, totalMonths - topMonths);
+
+    // 画面幅に収まるセル幅を概算（左工種パネル + 余白を差し引く）
+    const wrapWidth = wrap.clientWidth || document.documentElement.clientWidth || 1200;
+    const leftPanelWidth = 320;
+    const chartWidth = Math.max(400, wrapWidth - leftPanelWidth - 40);
+    const approxHalfDays = Math.max(topMonths, bottomMonths) * 31;
+    const halfDayWidth = Math.max(10, Math.min(40, Math.floor(chartWidth / approxHalfDays)));
+
+    // 前半を描画してクローン保存
+    state.view.anchorMonth = ymKey(ps);
+    state.view.monthsToShow = Math.max(2, topMonths);
+    state.view.dayWidth = halfDayWidth;
+    _origRenderForSplit();
+    const topClone = wrap.firstChild.cloneNode(true);
+    topClone.classList.add('screen-split-half', 'screen-split-top');
+
+    // 後半を描画
+    const secondAnchor = new Date(ps.getFullYear(), ps.getMonth() + topMonths, 1);
+    state.view.anchorMonth = ymKey(secondAnchor);
+    state.view.monthsToShow = Math.max(2, bottomMonths);
+    state.view.dayWidth = halfDayWidth;
+    _origRenderForSplit();
+    if (wrap.firstChild) wrap.firstChild.classList.add('screen-split-half', 'screen-split-bottom');
+
+    // 前半クローンを後半の上に挿入
+    wrap.insertBefore(topClone, wrap.firstChild);
+  } finally {
+    _applyingSplit = false;
+  }
+}
+
+function toggleSplitView() {
+  const btn = document.getElementById('btn-split-view');
+  if (_splitView) {
+    _splitView = false;
+    btn.classList.remove('active');
+    if (_splitRestoreView) {
+      state.view.anchorMonth = _splitRestoreView.anchorMonth;
+      state.view.monthsToShow = _splitRestoreView.monthsToShow;
+      state.view.dayWidth = _splitRestoreView.dayWidth;
+      _splitRestoreView = null;
+    }
+    render();
+  } else {
+    const p = currentProject();
+    if (!p || !p.start || !p.end) {
+      alert('案件の着工日・竣工日を設定してから「上下」を押してください');
+      return;
+    }
+    _splitRestoreView = {
+      anchorMonth: state.view.anchorMonth,
+      monthsToShow: state.view.monthsToShow,
+      dayWidth: state.view.dayWidth,
+    };
+    _splitView = true;
+    btn.classList.add('active');
+    render();
+  }
+}
+
+document.getElementById('btn-split-view').onclick = toggleSplitView;
 
 // ====================================================================
 // Settings modal
