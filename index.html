@@ -477,6 +477,9 @@
     display: none;
   }
 
+  /* Print split layout (top/bottom halves) */
+  .print-split-sep { display: none; }
+
   /* Print */
   @media print {
     .toolbar, .modal-back, .ctx-menu { display: none !important; }
@@ -513,6 +516,20 @@
 
     /* Default to A3 landscape — adjust in browser print dialog if needed */
     @page { size: A3 landscape; margin: 8mm; }
+
+    /* Split layout: separator between top and bottom halves */
+    .print-split-sep {
+      display: block !important;
+      height: 6mm;
+      border-top: 1.5px dashed #888;
+      margin: 4mm 0 2mm 0;
+    }
+    .print-half { page-break-inside: avoid; }
+    /* Compact rows for print so both halves fit on one A3 landscape page */
+    .print-half .task-row { height: 22px !important; }
+    .print-half .task-row.sub { height: 18px !important; }
+    .print-half .task-row-add,
+    .print-half .task-row-subadd { display: none !important; }
   }
 </style>
 </head>
@@ -2195,9 +2212,11 @@ document.getElementById('file-import').onchange = (e) => {
   e.target.value = '';
 };
 
-// 印刷時は工期全体が1ページに収まるよう、自動で表示範囲とセル幅を調整。
+// 印刷時は工期を前半・後半に分割して、上下2段組で1ページに収める。
+// 各段に工種一覧 + ガントが入る形（前半 = 開始月〜中間月、後半 = 中間月+1〜終了月）。
 // beforeprint/afterprint で Ctrl+P / 印刷ボタンの両方に対応。
 let _printRestoreView = null;
+
 window.addEventListener('beforeprint', () => {
   const p = currentProject();
   if (!p || !p.start || !p.end) return;
@@ -2208,15 +2227,38 @@ window.addEventListener('beforeprint', () => {
     monthsToShow: state.view.monthsToShow,
     dayWidth: state.view.dayWidth,
   };
-  // 工期の開始月を起点に、終了月まで含む月数を計算
+
+  // 工期の総月数を計算し、上下2段に均等分割（奇数月は上段が多くなる）
+  const totalMonths = (pe.getFullYear() - ps.getFullYear()) * 12 + (pe.getMonth() - ps.getMonth()) + 1;
+  const topMonths = Math.ceil(totalMonths / 2);
+  const bottomMonths = Math.max(1, totalMonths - topMonths);
+  // 各段の日数 (1段あたり最大 31日 × 月数 で概算) からセル幅を算出
+  const approxHalfDays = Math.max(topMonths, bottomMonths) * 31;
+  const halfDayWidth = Math.max(8, Math.min(28, Math.floor(1180 / approxHalfDays)));
+
+  // ----- 前半を描画してクローン保存 -----
   state.view.anchorMonth = ymKey(ps);
-  const months = (pe.getFullYear() - ps.getFullYear()) * 12 + (pe.getMonth() - ps.getMonth()) + 1;
-  state.view.monthsToShow = Math.min(24, Math.max(2, months));
-  // 日数からA3横の印字幅に収まるセル幅を算出（左列320px + 余白 を差し引いて約1180px）
-  const totalDays = Math.ceil((pe - ps) / 86400000) + 7;
-  state.view.dayWidth = Math.max(5, Math.min(28, Math.floor(1180 / totalDays)));
+  state.view.monthsToShow = Math.max(2, topMonths);
+  state.view.dayWidth = halfDayWidth;
   render();
+  const topHalfClone = wrap.firstChild.cloneNode(true);
+  topHalfClone.classList.add('print-half', 'print-top');
+
+  // ----- 後半を描画 (wrap が後半に置き換わる) -----
+  const secondAnchor = new Date(ps.getFullYear(), ps.getMonth() + topMonths, 1);
+  state.view.anchorMonth = ymKey(secondAnchor);
+  state.view.monthsToShow = Math.max(2, bottomMonths);
+  state.view.dayWidth = halfDayWidth;
+  render();
+  if (wrap.firstChild) wrap.firstChild.classList.add('print-half', 'print-bottom');
+
+  // ----- 前半クローンを後半の上に挿入し、区切りを置く -----
+  const sep = document.createElement('div');
+  sep.className = 'print-split-sep';
+  wrap.insertBefore(sep, wrap.firstChild);
+  wrap.insertBefore(topHalfClone, sep);
 });
+
 window.addEventListener('afterprint', () => {
   if (!_printRestoreView) return;
   Object.assign(state.view, _printRestoreView);
