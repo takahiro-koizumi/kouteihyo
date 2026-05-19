@@ -681,17 +681,26 @@
       <button class="close" data-close="#modal-settings">×</button>
     </div>
     <div class="modal-body">
-      <div class="section-title">Dropbox連携</div>
-      <label class="row">App Key <input type="text" id="dbx-app-key" placeholder="2whrnu6f23ok9bn"></label>
-      <label class="row">保存先パス <input type="text" id="dbx-file-path" placeholder="/工程表/schedule.json"></label>
+      <div class="section-title">Dropbox連携（全社員で共有）</div>
+      <div style="font-size:12px;color:#444;margin-bottom:8px;">
+        大田原工業 工事部のチーム共有フォルダに自動保存します。<br>
+        各社員が「接続」を1回押すだけで、全員が同じ工程表データを編集できます。
+      </div>
       <div id="dbx-info" style="font-size:12px;color:#666;"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button id="btn-dbx-save-key">App Key保存</button>
-        <button id="btn-dbx-connect">接続</button>
+        <button id="btn-dbx-connect" class="primary">Dropboxに接続</button>
         <button id="btn-dbx-sync">今すぐ同期</button>
         <button id="btn-dbx-pull">取得</button>
         <button id="btn-dbx-disconnect" class="danger" style="color:#c33;background:#fff;border-color:#c33;">切断</button>
       </div>
+      <details style="margin-top:10px;">
+        <summary style="cursor:pointer;font-size:12px;color:#666;">▶ 詳細設定（通常さわらない）</summary>
+        <label class="row" style="margin-top:8px;">保存先パス <input type="text" id="dbx-file-path"></label>
+        <button id="btn-dbx-save-path" style="margin-top:4px;">パスを保存</button>
+        <div style="font-size:11px;color:#999;margin-top:6px;">
+          既定: <code>/大田原工業　工事部/☆施工中/★工程表/kouteihyo.json</code>
+        </div>
+      </details>
 
       <div class="section-title">休日</div>
       <label class="row" style="align-items:start;">休日リスト
@@ -2297,8 +2306,7 @@ document.getElementById('btn-settings').onclick = () => openSettingsModal();
 // Settings modal
 // ====================================================================
 function openSettingsModal() {
-  document.getElementById('dbx-app-key').value = localStorage.getItem('dbx_app_key') || '';
-  document.getElementById('dbx-file-path').value = localStorage.getItem('dbx_file_path') || '/工程表/schedule.json';
+  document.getElementById('dbx-file-path').value = localStorage.getItem('dbx_file_path') || DBX_DEFAULT_FILE_PATH;
   document.getElementById('holidays-text').value = Object.entries(state.holidays)
     .map(([d, name]) => d + ' ' + name).join('\n');
   document.getElementById('opt-show-weekends').checked = state.options.showWeekends;
@@ -2327,13 +2335,12 @@ document.getElementById('settings-save').onclick = () => {
   render();
   toast('設定を保存しました');
 };
-document.getElementById('btn-dbx-save-key').onclick = () => {
-  const k = document.getElementById('dbx-app-key').value.trim();
-  const p = document.getElementById('dbx-file-path').value.trim() || '/工程表/schedule.json';
-  if (!k) { alert('App Keyを入力'); return; }
-  localStorage.setItem('dbx_app_key', k);
+document.getElementById('btn-dbx-save-path').onclick = () => {
+  let p = document.getElementById('dbx-file-path').value.trim() || DBX_DEFAULT_FILE_PATH;
+  if (!p.startsWith('/')) p = '/' + p;
   localStorage.setItem('dbx_file_path', p);
-  toast('App Key保存');
+  document.getElementById('dbx-file-path').value = p;
+  toast('保存先パスを更新');
 };
 document.getElementById('btn-dbx-connect').onclick = () => dbxConnect();
 document.getElementById('btn-dbx-sync').onclick = () => dbxManualSync();
@@ -2364,7 +2371,11 @@ function toast(msg) {
 
 // ====================================================================
 // Dropbox PKCE OAuth (mirrors genba-board)
+// 大田原工業 工事部 全社員で共有するため、Full Dropbox型アプリで
+// チーム共有フォルダに直接書き込む
 // ====================================================================
+const DBX_APP_KEY = 'w0akss3w157oa53';
+const DBX_DEFAULT_FILE_PATH = '/大田原工業　工事部/☆施工中/★工程表/kouteihyo.json';
 let dbxToken = localStorage.getItem('dbx_token') || null;
 let dbxAutoSaveTimer = null;
 let dbxLastSync = null;
@@ -2372,7 +2383,7 @@ let _dbxPending = false;
 let _lastDbxRev = null;
 
 function dbxFilePath() {
-  return localStorage.getItem('dbx_file_path') || '/工程表/schedule.json';
+  return localStorage.getItem('dbx_file_path') || DBX_DEFAULT_FILE_PATH;
 }
 
 function setDbxStatus(state, text) {
@@ -2398,14 +2409,12 @@ async function dbxSha256B64Url(s) {
 }
 
 async function dbxConnect() {
-  const appKey = localStorage.getItem('dbx_app_key');
-  if (!appKey) { alert('まず App Key を保存してください'); return; }
   const verifier = dbxRandom(64);
   const challenge = await dbxSha256B64Url(verifier);
   localStorage.setItem('dbx_verifier', verifier);
   const redirect = window.location.origin + window.location.pathname;
   const url = 'https://www.dropbox.com/oauth2/authorize?' + new URLSearchParams({
-    client_id: appKey,
+    client_id: DBX_APP_KEY,
     response_type: 'code',
     redirect_uri: redirect,
     code_challenge: challenge,
@@ -2420,8 +2429,7 @@ async function dbxHandleCallback() {
   const code = params.get('code');
   if (!code) return false;
   const verifier = localStorage.getItem('dbx_verifier');
-  const appKey = localStorage.getItem('dbx_app_key');
-  if (!verifier || !appKey) {
+  if (!verifier) {
     history.replaceState({}, '', window.location.pathname);
     return false;
   }
@@ -2431,7 +2439,7 @@ async function dbxHandleCallback() {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        code, grant_type: 'authorization_code', client_id: appKey,
+        code, grant_type: 'authorization_code', client_id: DBX_APP_KEY,
         code_verifier: verifier, redirect_uri: redirect,
       }).toString(),
     });
@@ -2451,15 +2459,14 @@ async function dbxHandleCallback() {
 
 async function dbxRefreshToken() {
   const refresh = localStorage.getItem('dbx_refresh');
-  const appKey = localStorage.getItem('dbx_app_key');
-  if (!refresh || !appKey) return false;
+  if (!refresh) return false;
   const resp = await fetch('https://api.dropboxapi.com/oauth2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: refresh,
-      client_id: appKey,
+      client_id: DBX_APP_KEY,
     }).toString(),
   });
   const data = await resp.json();
@@ -2666,6 +2673,22 @@ window.addEventListener('beforeunload', (e) => {
 // Boot
 // ====================================================================
 (async function boot() {
+  // 旧App Keyからのアップグレード: App Key変わったら古いtokenは無効なのでクリア
+  const previousAppKey = localStorage.getItem('dbx_app_key');
+  if (previousAppKey && previousAppKey !== DBX_APP_KEY) {
+    localStorage.removeItem('dbx_token');
+    localStorage.removeItem('dbx_refresh');
+    dbxToken = null;
+    console.log('[Dropbox] App Key changed → cleared old tokens, please re-connect');
+  }
+  localStorage.setItem('dbx_app_key', DBX_APP_KEY);
+
+  // 旧既定パス /工程表/schedule.json からの自動アップグレード
+  const savedPath = localStorage.getItem('dbx_file_path');
+  if (!savedPath || savedPath === '/工程表/schedule.json') {
+    localStorage.setItem('dbx_file_path', DBX_DEFAULT_FILE_PATH);
+  }
+
   // Dropbox callback handling
   const handled = await dbxHandleCallback();
   if (dbxToken) {
