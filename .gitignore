@@ -1,0 +1,6 @@
+*.log
+.DS_Store
+Thumbs.db
+
+# 顧客情報を含む現場別サンプルJSONは公開しない（小倉町/誉田町等の実数量・実金額・住所）
+samples/

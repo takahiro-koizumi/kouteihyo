@@ -1,0 +1,19 @@
+{
+  "name": "工程表",
+  "short_name": "工程表",
+  "description": "工程表作成アプリ - 大田原工業",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#ecebe4",
+  "theme_color": "#2b3a4a",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
