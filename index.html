@@ -565,6 +565,7 @@
     <span class="dbx-status" id="dbx-status">
       <span class="dot"></span><span id="dbx-status-text">未接続</span>
     </span>
+    <button id="btn-print" title="印刷 (Ctrl+P) — A3横・上下に日付ヘッダー">🖨 印刷</button>
     <button id="btn-settings" title="設定">⚙</button>
   </div>
 
@@ -2194,6 +2195,7 @@ document.getElementById('file-import').onchange = (e) => {
   e.target.value = '';
 };
 
+document.getElementById('btn-print').onclick = () => window.print();
 document.getElementById('btn-settings').onclick = () => openSettingsModal();
 
 // ====================================================================
