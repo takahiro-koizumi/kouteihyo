@@ -2640,9 +2640,17 @@ async function dbxAutoPullIfChanged() {
 const DBX_POLL_INTERVAL_MS = 5 * 1000;
 setInterval(dbxAutoPullIfChanged, DBX_POLL_INTERVAL_MS);
 
-// ページ復帰時(モバイル裏→表、別タブから戻る等)も即チェック
+// ページ復帰時(モバイル裏→表、別タブから戻る等)は即チェック。
+// 裏に隠れた瞬間は debounce を待たずに即セーブ(他端末への伝搬を最速化)。
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') dbxAutoPullIfChanged();
+  if (document.visibilityState === 'visible') {
+    dbxAutoPullIfChanged();
+  } else if (document.visibilityState === 'hidden') {
+    if (dbxToken && _dbxPending) {
+      if (dbxAutoSaveTimer) { clearTimeout(dbxAutoSaveTimer); dbxAutoSaveTimer = null; }
+      dbxSave(true);
+    }
+  }
 });
 window.addEventListener('focus', () => { dbxAutoPullIfChanged(); });
 
