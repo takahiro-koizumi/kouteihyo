@@ -471,11 +471,48 @@
   }
   .section-title:first-child { margin-top: 0; }
 
+  /* Bottom header (print only — mirror of top header at the bottom of the gantt) */
+  .head-corner.bottom,
+  .bottom-head {
+    display: none;
+  }
+
   /* Print */
   @media print {
     .toolbar, .modal-back, .ctx-menu { display: none !important; }
     .gantt-wrap { overflow: visible; }
     html, body { overflow: visible; height: auto; }
+
+    /* Unstick top header so it stays at the top of the printed page */
+    .head-corner, .head-month, .head-day {
+      position: static !important;
+      top: auto !important;
+    }
+
+    /* Bottom header: show below the bars area */
+    .head-corner.bottom {
+      display: flex !important;
+      position: static !important;
+      grid-row: 3 / 4 !important;
+      grid-column: 1 / 2 !important;
+    }
+    .bottom-head {
+      display: block !important;
+      grid-row: 3 / 4 !important;
+      grid-column: 2 / 3 !important;
+      position: static !important;
+    }
+    .bottom-head .head-month,
+    .bottom-head .head-day {
+      position: static !important;
+      top: auto !important;
+    }
+
+    /* Preserve background colors (休日色・バー色) on print */
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
+    /* Default to A3 landscape — adjust in browser print dialog if needed */
+    @page { size: A3 landscape; margin: 8mm; }
   }
 </style>
 </head>
@@ -1297,6 +1334,21 @@ function renderGantt() {
   rightHead.appendChild(monthRow);
   rightHead.appendChild(dayRow);
   gantt.appendChild(rightHead);
+
+  // ----- Bottom header (print only — mirror of top at grid row 3) -----
+  const cornerBot = corner.cloneNode(true);
+  cornerBot.classList.add('bottom');
+  gantt.appendChild(cornerBot);
+
+  const rightHeadBot = rightHead.cloneNode(true);
+  rightHeadBot.classList.add('bottom-head');
+  // Override the inline sticky/top/zIndex copied from the top header
+  rightHeadBot.style.position = 'static';
+  rightHeadBot.style.top = '';
+  rightHeadBot.style.zIndex = '';
+  rightHeadBot.style.gridRow = '3 / 4';
+  rightHeadBot.style.gridColumn = '2 / 3';
+  gantt.appendChild(rightHeadBot);
 
   // ----- Task rows (left side) -----
   const left = document.createElement('div');
