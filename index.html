@@ -2591,6 +2591,61 @@ function scheduleDbxAutoSave() {
   dbxAutoSaveTimer = setTimeout(() => { dbxSave(true); dbxAutoSaveTimer = null; }, 2000);
 }
 
+// ====================================================================
+// Cross-device sync: 他端末で更新があったら自動で取り込んで画面に反映
+// (genba-board 同等の 5 秒ポーリング)
+// ====================================================================
+async function dbxCheckRemoteRev() {
+  if (!dbxToken) return null;
+  try {
+    const doFetch = () => fetch('https://api.dropboxapi.com/2/files/get_metadata', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + dbxToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: dbxFilePath() })
+    });
+    let resp = await doFetch();
+    if (resp.status === 401) {
+      const ok = await dbxRefreshToken();
+      if (ok) resp = await doFetch();
+    }
+    if (!resp.ok) return null;
+    const meta = await resp.json();
+    return meta.rev || null;
+  } catch (e) { return null; }
+}
+
+async function dbxAutoPullIfChanged() {
+  if (!dbxToken) return;
+  if (_dbxPending) return; // 未送信のローカル変更がある時は上書きしない
+  if (document.visibilityState !== 'visible') return;
+  // モーダル/コンテキストメニュー表示中・ドラッグ操作中は触らない
+  if (document.querySelector('.modal-back')) return;
+  if (document.querySelector('.ctx-menu')) return;
+  if (document.body.classList.contains('dragging')) return;
+  // メタデータ軽量チェック：確実に同じ rev ならスキップ
+  const remoteRev = await dbxCheckRemoteRev();
+  if (remoteRev && _lastDbxRev && remoteRev === _lastDbxRev) return;
+  // 変化の可能性あり → silent download して内容を比較
+  const remote = await dbxLoad(true);
+  if (!remote) return;
+  if (JSON.stringify(remote) === JSON.stringify(state)) return; // 実際は同じ
+  console.log('[Dropbox] 他端末の変更を反映 (rev:', remoteRev || '?', ')');
+  state = migrate(remote);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  render();
+  toast('他端末の変更を反映しました');
+}
+
+// 5秒ごとに他端末の更新をチェック
+const DBX_POLL_INTERVAL_MS = 5 * 1000;
+setInterval(dbxAutoPullIfChanged, DBX_POLL_INTERVAL_MS);
+
+// ページ復帰時(モバイル裏→表、別タブから戻る等)も即チェック
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') dbxAutoPullIfChanged();
+});
+window.addEventListener('focus', () => { dbxAutoPullIfChanged(); });
+
 window.addEventListener('beforeunload', (e) => {
   if (_dbxPending) {
     e.preventDefault();
