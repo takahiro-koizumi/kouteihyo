@@ -2195,6 +2195,35 @@ document.getElementById('file-import').onchange = (e) => {
   e.target.value = '';
 };
 
+// 印刷時は工期全体が1ページに収まるよう、自動で表示範囲とセル幅を調整。
+// beforeprint/afterprint で Ctrl+P / 印刷ボタンの両方に対応。
+let _printRestoreView = null;
+window.addEventListener('beforeprint', () => {
+  const p = currentProject();
+  if (!p || !p.start || !p.end) return;
+  const ps = parseYMD(p.start), pe = parseYMD(p.end);
+  if (!ps || !pe) return;
+  _printRestoreView = {
+    anchorMonth: state.view.anchorMonth,
+    monthsToShow: state.view.monthsToShow,
+    dayWidth: state.view.dayWidth,
+  };
+  // 工期の開始月を起点に、終了月まで含む月数を計算
+  state.view.anchorMonth = ymKey(ps);
+  const months = (pe.getFullYear() - ps.getFullYear()) * 12 + (pe.getMonth() - ps.getMonth()) + 1;
+  state.view.monthsToShow = Math.min(24, Math.max(2, months));
+  // 日数からA3横の印字幅に収まるセル幅を算出（左列320px + 余白 を差し引いて約1180px）
+  const totalDays = Math.ceil((pe - ps) / 86400000) + 7;
+  state.view.dayWidth = Math.max(5, Math.min(28, Math.floor(1180 / totalDays)));
+  render();
+});
+window.addEventListener('afterprint', () => {
+  if (!_printRestoreView) return;
+  Object.assign(state.view, _printRestoreView);
+  _printRestoreView = null;
+  render();
+});
+
 document.getElementById('btn-print').onclick = () => window.print();
 document.getElementById('btn-settings').onclick = () => openSettingsModal();
 
