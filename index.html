@@ -520,9 +520,9 @@
     /* Split layout: separator between top and bottom halves */
     .print-split-sep {
       display: block !important;
-      height: 6mm;
+      height: 4mm;
       border-top: 1.5px dashed #888;
-      margin: 4mm 0 2mm 0;
+      margin: 2mm 0;
     }
     .print-half { page-break-inside: avoid; }
     /* Compact rows for print so both halves fit on one A3 landscape page */
@@ -530,6 +530,21 @@
     .print-half .task-row.sub { height: 18px !important; }
     .print-half .task-row-add,
     .print-half .task-row-subadd { display: none !important; }
+    /* Compact project header (memo is multiline, truncate for print) */
+    .proj-header {
+      padding: 2px 8px !important;
+      font-size: 10px !important;
+    }
+    .proj-header .val[data-field="memo"] {
+      max-height: 2.6em;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    /* Compact milestone pills */
+    #workdays-bar { padding: 2px 8px !important; }
+    #workdays-bar > div { font-size: 9px !important; padding: 1px 4px !important; }
   }
 </style>
 </head>
@@ -2226,7 +2241,10 @@ window.addEventListener('beforeprint', () => {
     anchorMonth: state.view.anchorMonth,
     monthsToShow: state.view.monthsToShow,
     dayWidth: state.view.dayWidth,
+    collapsed: p.tasks.map(t => !!t.collapsed),
   };
+  // 1ページに収めるため、全親工種を折りたたんで中項目を隠す（中項目バーは親バーに集約される）
+  p.tasks.forEach(t => { t.collapsed = true; });
 
   // 工期の総月数を計算し、上下2段に均等分割（奇数月は上段が多くなる）
   const totalMonths = (pe.getFullYear() - ps.getFullYear()) * 12 + (pe.getMonth() - ps.getMonth()) + 1;
@@ -2261,7 +2279,13 @@ window.addEventListener('beforeprint', () => {
 
 window.addEventListener('afterprint', () => {
   if (!_printRestoreView) return;
-  Object.assign(state.view, _printRestoreView);
+  const p = currentProject();
+  state.view.anchorMonth = _printRestoreView.anchorMonth;
+  state.view.monthsToShow = _printRestoreView.monthsToShow;
+  state.view.dayWidth = _printRestoreView.dayWidth;
+  if (p && _printRestoreView.collapsed) {
+    p.tasks.forEach((t, i) => { t.collapsed = _printRestoreView.collapsed[i]; });
+  }
   _printRestoreView = null;
   render();
 });
