@@ -640,6 +640,7 @@
     <span class="dbx-status" id="dbx-status">
       <span class="dot"></span><span id="dbx-status-text">未接続</span>
     </span>
+    <button id="btn-save-pdf" title="現在の表示をPDF保存 — 上下表示中はその段組のまま">📄 PDF</button>
     <button id="btn-print" title="印刷 (Ctrl+P) — A3横・上下に日付ヘッダー">🖨 印刷</button>
     <button id="btn-settings" title="設定">⚙</button>
   </div>
@@ -2427,6 +2428,96 @@ window.addEventListener('afterprint', () => {
 
 document.getElementById('btn-print').onclick = () => window.print();
 document.getElementById('btn-settings').onclick = () => openSettingsModal();
+
+// ====================================================================
+// PDF保存 — 画面の表示状態をそのままA3横PDFにして保存
+// 印刷ダイアログを介さない（社内環境で印刷がうまく動かない場合のフォールバック）
+// html2canvas + jsPDF を CDN から遅延ロード
+// ====================================================================
+function _loadScriptOnce(url) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[data-src="${url}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = url;
+    s.dataset.src = url;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('スクリプト読み込み失敗: ' + url));
+    document.head.appendChild(s);
+  });
+}
+
+async function saveAsPDF() {
+  const btn = document.getElementById('btn-save-pdf');
+  const origLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '📄 生成中…';
+  let printSetupApplied = false;
+  try {
+    // 必要時のみ CDN ロード（社内ネットワークでCDNブロックされている場合は失敗）
+    await _loadScriptOnce('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
+    await _loadScriptOnce('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
+
+    // beforeprint と同じレイアウト調整を適用（折りたたみ・コンパクト化）
+    window.dispatchEvent(new Event('beforeprint'));
+    printSetupApplied = true;
+    // レイアウトが落ち着くまで待機
+    await new Promise(r => setTimeout(r, 150));
+
+    // ガント部分の wrap 全体を target に
+    const target = wrap;
+    const fullWidth = target.scrollWidth;
+    const fullHeight = target.scrollHeight;
+
+    const canvas = await html2canvas(target, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      width: fullWidth,
+      height: fullHeight,
+      windowWidth: Math.max(fullWidth, 1600),
+      windowHeight: Math.max(fullHeight, 1200),
+      scrollX: 0,
+      scrollY: 0,
+      useCORS: true,
+    });
+
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 8;
+    const usableW = pageW - margin * 2;
+    const usableH = pageH - margin * 2;
+    const imgRatio = canvas.width / canvas.height;
+    const usableRatio = usableW / usableH;
+    let drawW, drawH;
+    if (imgRatio > usableRatio) {
+      drawW = usableW;
+      drawH = usableW / imgRatio;
+    } else {
+      drawH = usableH;
+      drawW = usableH * imgRatio;
+    }
+    const offsetX = margin + (usableW - drawW) / 2;
+    const offsetY = margin + (usableH - drawH) / 2;
+
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', offsetX, offsetY, drawW, drawH);
+
+    const p = currentProject();
+    const safeName = (p?.name || '工程表').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+    const fname = `${safeName}_工程表_${ymdKey(new Date())}.pdf`;
+    pdf.save(fname);
+    toast('PDFを保存: ' + fname);
+  } catch (e) {
+    console.error('[PDF] error:', e);
+    alert('PDF生成に失敗しました。\n' + e.message + '\n\n代わりに「🖨 印刷」→「Microsoft Print to PDF」でもPDF保存できます。');
+  } finally {
+    if (printSetupApplied) window.dispatchEvent(new Event('afterprint'));
+    btn.disabled = false;
+    btn.textContent = origLabel;
+  }
+}
+
+document.getElementById('btn-save-pdf').onclick = () => saveAsPDF();
 
 // ====================================================================
 // 上下表示（画面上で工期を前半・後半の2段に分割するトグル）
