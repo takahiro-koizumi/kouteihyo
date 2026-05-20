@@ -2480,39 +2480,21 @@ async function saveAsPDF() {
       useCORS: true,
     });
 
-    // 工事件名のタイトルを別途キャプチャ（jsPDFは日本語フォント非対応のため画像で埋め込み）
-    const projForTitle = currentProject();
-    const titleEl = document.createElement('div');
-    titleEl.style.cssText = 'position:absolute;left:-10000px;top:0;padding:6px 12px;font-family:"Yu Gothic",YuGothic,"Hiragino Sans","Meiryo",sans-serif;font-size:20px;font-weight:bold;color:#000;background:#ffffff;white-space:nowrap;line-height:1.2;';
-    titleEl.textContent = '工事件名: ' + (projForTitle?.name || '無題');
-    document.body.appendChild(titleEl);
-    let titleCanvas;
-    try {
-      titleCanvas = await html2canvas(titleEl, { scale: 1.5, backgroundColor: '#ffffff' });
-    } finally {
-      document.body.removeChild(titleEl);
-    }
-
     const { jsPDF } = window.jspdf;
     // PDFページサイズをチャート内容の実寸に合わせる（A3固定だと縦に大きな余白が出るため）
     const scale = 1.5; // html2canvas のスケールに合わせる
     const cssPxPerMm = 96 / 25.4; // 標準 96 DPI 換算 ≈ 3.78
     const contentWmm = (canvas.width / scale) / cssPxPerMm;
     const contentHmm = (canvas.height / scale) / cssPxPerMm;
-    const titleWmm = (titleCanvas.width / scale) / cssPxPerMm;
-    const titleHmm = (titleCanvas.height / scale) / cssPxPerMm;
-    const margin = 4;
-    const gap = 2; // タイトル↔ガント間のギャップmm
-    const pdfW = Math.max(contentWmm, titleWmm) + margin * 2;
-    const pdfH = titleHmm + gap + contentHmm + margin * 2;
+    const margin = 4; // 全方向 4mm
+    const pdfW = contentWmm + margin * 2;
+    const pdfH = contentHmm + margin * 2;
     const pdf = new jsPDF({
       orientation: pdfW >= pdfH ? 'landscape' : 'portrait',
       unit: 'mm',
       format: [pdfW, pdfH],
     });
-    // タイトル → ガントの順で配置
-    pdf.addImage(titleCanvas.toDataURL('image/jpeg', 0.9), 'JPEG', margin, margin, titleWmm, titleHmm, undefined, 'FAST');
-    pdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', margin, margin + titleHmm + gap, contentWmm, contentHmm, undefined, 'FAST');
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', margin, margin, contentWmm, contentHmm, undefined, 'FAST');
 
     const p = currentProject();
     const safeName = (p?.name || '工程表').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
