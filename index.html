@@ -2544,19 +2544,22 @@ function applySplitToWrap() {
     const numRows = Math.max(1, Math.ceil(totalMonths / rowMonths));
 
     // セル幅を rowMonths 基準で算出。印刷モード時はA3横の印字幅にフィット
-    let chartWidth, maxCellWidth;
+    let chartWidth, maxCellWidth, minCellWidth;
     if (_printingMode) {
       // A3横の印字幅相当（左工種パネル+ガントを含む）。既存の2段印刷ロジックと同じ
       chartWidth = 1180;
       maxCellWidth = 28;
+      // 印刷モードでは2桁日付（11〜31）が重ならない最小幅を確保（PDFがその分横長になる）
+      minCellWidth = 14;
     } else {
       const wrapWidth = wrap.clientWidth || document.documentElement.clientWidth || 1200;
       const leftPanelWidth = 320;
       chartWidth = Math.max(400, wrapWidth - leftPanelWidth - 40);
       maxCellWidth = 40;
+      minCellWidth = 8;
     }
     const approxDays = rowMonths * 31;
-    const cellWidth = Math.max(8, Math.min(maxCellWidth, Math.floor(chartWidth / approxDays)));
+    const cellWidth = Math.max(minCellWidth, Math.min(maxCellWidth, Math.floor(chartWidth / approxDays)));
 
     // 各段を順に描画。最後の段だけライブで残し、それより前は cloneNode で固定スナップショット化
     const clones = [];
