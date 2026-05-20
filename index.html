@@ -2469,7 +2469,7 @@ async function saveAsPDF() {
     const fullHeight = target.scrollHeight;
 
     const canvas = await html2canvas(target, {
-      scale: 2,
+      scale: 1.5, // 2x→1.5x で約半分のピクセル数、印字には十分
       backgroundColor: '#ffffff',
       width: fullWidth,
       height: fullHeight,
@@ -2500,7 +2500,8 @@ async function saveAsPDF() {
     const offsetX = margin + (usableW - drawW) / 2;
     const offsetY = margin + (usableH - drawH) / 2;
 
-    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', offsetX, offsetY, drawW, drawH);
+    // JPEG quality 0.9 で十分視認性ありつつファイルサイズ激減（37MB → 数MB級）
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', offsetX, offsetY, drawW, drawH, undefined, 'FAST');
 
     const p = currentProject();
     const safeName = (p?.name || '工程表').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
