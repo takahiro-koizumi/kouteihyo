@@ -562,6 +562,16 @@
     .print-half .task-row.sub { height: 18px !important; }
     .print-half .task-row-add,
     .print-half .task-row-subadd { display: none !important; }
+
+    /* Same compacting for ユーザー指定のN段表示 (上下表示) on print */
+    .screen-split-row { page-break-inside: avoid; padding-bottom: 4px !important; margin-bottom: 4px !important; border-bottom-style: dotted !important; }
+    .screen-split-row.screen-split-last { border-bottom: none !important; padding-bottom: 0 !important; margin-bottom: 0 !important; }
+    .screen-split-row .task-row { height: 22px !important; }
+    .screen-split-row .task-row.sub { height: 18px !important; }
+    .screen-split-row .task-row-add,
+    .screen-split-row .task-row-subadd { display: none !important; }
+    /* 段ラベル（前半/後半など）は紙では冗長なので非表示 */
+    .screen-split-row::after { display: none !important; }
     /* Compact project header (memo is multiline, truncate for print) */
     .proj-header {
       padding: 2px 8px !important;
@@ -2358,11 +2368,19 @@ window.addEventListener('beforeprint', () => {
     monthsToShow: state.view.monthsToShow,
     dayWidth: state.view.dayWidth,
     collapsed: p.tasks.map(t => !!t.collapsed),
+    wasSplitView: _splitView,
   };
   // 1ページに収めるため、全親工種を折りたたんで中項目を隠す（中項目バーは親バーに集約される）
   p.tasks.forEach(t => { t.collapsed = true; });
 
-  // 工期の総月数を計算し、上下2段に均等分割（奇数月は上段が多くなる）
+  if (_splitView) {
+    // ユーザーが選んだN段レイアウトのまま、印刷幅でセルを再計算して描画
+    _printingMode = true;
+    render(); // → applySplitToWrap が _printingMode を見て A3横向けセル幅で描画
+    return;
+  }
+
+  // 既定: 工期の総月数を計算し、上下2段に均等分割（奇数月は上段が多くなる）
   const totalMonths = (pe.getFullYear() - ps.getFullYear()) * 12 + (pe.getMonth() - ps.getMonth()) + 1;
   const topMonths = Math.ceil(totalMonths / 2);
   const bottomMonths = Math.max(1, totalMonths - topMonths);
@@ -2403,7 +2421,8 @@ window.addEventListener('afterprint', () => {
     p.tasks.forEach((t, i) => { t.collapsed = _printRestoreView.collapsed[i]; });
   }
   _printRestoreView = null;
-  render();
+  _printingMode = false;
+  render(); // _splitView が true なら applySplitToWrap が画面幅で再描画する
 });
 
 document.getElementById('btn-print').onclick = () => window.print();
@@ -2416,6 +2435,7 @@ document.getElementById('btn-settings').onclick = () => openSettingsModal();
 let _splitView = false;
 let _splitRestoreView = null;
 let _applyingSplit = false;
+let _printingMode = false; // beforeprint で true、afterprint で false。applySplitToWrap がセル幅をA3横向け調整するためのフラグ
 
 const _origRenderForSplit = render;
 render = function() {
@@ -2437,12 +2457,20 @@ function applySplitToWrap() {
     const rowMonths = Math.max(2, state.view.monthsToShow || 4);
     const numRows = Math.max(1, Math.ceil(totalMonths / rowMonths));
 
-    // 画面幅に収まるセル幅を rowMonths 基準で算出
-    const wrapWidth = wrap.clientWidth || document.documentElement.clientWidth || 1200;
-    const leftPanelWidth = 320;
-    const chartWidth = Math.max(400, wrapWidth - leftPanelWidth - 40);
+    // セル幅を rowMonths 基準で算出。印刷モード時はA3横の印字幅にフィット
+    let chartWidth, maxCellWidth;
+    if (_printingMode) {
+      // A3横の印字幅相当（左工種パネル+ガントを含む）。既存の2段印刷ロジックと同じ
+      chartWidth = 1180;
+      maxCellWidth = 28;
+    } else {
+      const wrapWidth = wrap.clientWidth || document.documentElement.clientWidth || 1200;
+      const leftPanelWidth = 320;
+      chartWidth = Math.max(400, wrapWidth - leftPanelWidth - 40);
+      maxCellWidth = 40;
+    }
     const approxDays = rowMonths * 31;
-    const cellWidth = Math.max(8, Math.min(40, Math.floor(chartWidth / approxDays)));
+    const cellWidth = Math.max(8, Math.min(maxCellWidth, Math.floor(chartWidth / approxDays)));
 
     // 各段を順に描画。最後の段だけライブで残し、それより前は cloneNode で固定スナップショット化
     const clones = [];
