@@ -624,7 +624,7 @@
 
     <button id="btn-fit-period" title="工期に合わせて表示">⤢工期</button>
     <button id="btn-split-view" title="上下表示 — 工期を前半/後半の2段に分割して全体を1画面表示">⇅ 上下</button>
-    <button id="btn-export" title="JSONエクスポート">↓</button>
+    <button id="btn-export" title="エクスポート — Dropbox接続中なら案件の工程表フォルダにschedule.jsonとして保存、未接続ならローカルダウンロード">↓</button>
     <button id="btn-import" title="JSONインポート">↑</button>
     <button id="btn-save" title="保存">💾</button>
     <span class="dbx-status" id="dbx-status">
@@ -670,6 +670,16 @@
       <label class="row">着工日 <input type="date" id="proj-start"></label>
       <label class="row">竣工日 <input type="date" id="proj-end"></label>
       <label class="row" style="align-items:start;">メモ <textarea id="proj-memo"></textarea></label>
+      <label class="row" style="align-items:start;">
+        Dropboxパス
+        <div style="flex:1;">
+          <input type="text" id="proj-dbx-path" placeholder="（空欄なら案件名から自動）" style="width:100%;">
+          <div style="font-size:11px;color:#888;margin-top:4px;">
+            ↓エクスポートでこのパスにschedule.jsonとして保存。<br>
+            既定: <code>/大田原工業　工事部/☆施工中/[案件名]/工程表/schedule.json</code>
+          </div>
+        </div>
+      </label>
     </div>
     <div class="modal-foot">
       <button data-close="#modal-proj">キャンセル</button>
@@ -2023,6 +2033,7 @@ function openProjectModal(id) {
   document.getElementById('proj-start').value    = p ? p.start : ymdKey(new Date());
   document.getElementById('proj-end').value      = p ? p.end : ymdKey(addMonths(new Date(), 3));
   document.getElementById('proj-memo').value     = p ? (p.memo || '') : '';
+  document.getElementById('proj-dbx-path').value = p ? (p.dbxPath || '') : '';
   openModal('#modal-proj');
   setTimeout(() => document.getElementById('proj-name').focus(), 50);
 }
@@ -2035,6 +2046,7 @@ document.getElementById('proj-save').onclick = () => {
     start:    document.getElementById('proj-start').value,
     end:      document.getElementById('proj-end').value,
     memo:     document.getElementById('proj-memo').value,
+    dbxPath:  document.getElementById('proj-dbx-path').value.trim(),
   };
   if (editingProjId) {
     Object.assign(state.projects[editingProjId], data, { updatedAt: new Date().toISOString() });
@@ -2236,15 +2248,77 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-document.getElementById('btn-export').onclick = () => {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+// ====================================================================
+// エクスポート: 現在の案件単体を schedule.json として
+// その案件の Dropbox 工程表フォルダに保存。
+// 未接続 or パス未設定時はローカルダウンロードにフォールバック。
+// ====================================================================
+function resolveProjectDbxPath(p) {
+  // 案件に明示的に設定されたパスがあれば最優先
+  if (p.dbxPath && p.dbxPath.trim()) {
+    let path = p.dbxPath.trim();
+    if (!path.startsWith('/')) path = '/' + path;
+    return path;
+  }
+  // 既定: 案件名から自動生成
+  const safeName = (p.name || '無題').replace(/[/\\]/g, '_');
+  return `/大田原工業　工事部/☆施工中/${safeName}/工程表/schedule.json`;
+}
+
+function buildSingleProjectExport(p) {
+  // 1案件だけ含む schemaVersion=2 形式（既存サンプルファイルと同じ構造）
+  return {
+    schemaVersion: state.schemaVersion || 2,
+    projects: { [p.id]: p },
+  };
+}
+
+async function exportCurrentProject() {
+  const p = currentProject();
+  if (!p) { alert('案件が選択されていません'); return; }
+  const exportObj = buildSingleProjectExport(p);
+  const json = JSON.stringify(exportObj, null, 2);
+
+  // Dropbox 接続中ならクラウドへ
+  if (dbxToken) {
+    const path = resolveProjectDbxPath(p);
+    setDbxStatus('syncing', '保存中');
+    try {
+      const resp = await dbxApiCall(
+        'https://content.dropboxapi.com/2/files/upload',
+        { path, mode: 'overwrite', mute: true, autorename: false },
+        json
+      );
+      if (resp && resp.ok) {
+        const result = await resp.json().catch(() => null);
+        setDbxStatus('connected', '保存完了');
+        toast('Dropboxに保存しました: ' + (result?.path_display || path));
+        return;
+      }
+      const errText = resp ? await resp.text().catch(() => resp.statusText) : 'no response';
+      console.error('[Export] Dropbox保存失敗', resp?.status, errText);
+      setDbxStatus('error', '保存失敗');
+      alert('Dropboxへの保存に失敗しました（HTTP ' + (resp?.status || '?') + '）。\nローカルにダウンロードします。');
+    } catch (e) {
+      console.error('[Export] error', e);
+      alert('Dropboxへの保存中にエラー: ' + e.message + '\nローカルにダウンロードします。');
+    }
+  }
+
+  // フォールバック: ローカルダウンロード
+  const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'kouteihyo-' + ymdKey(new Date()) + '.json';
+  // ファイル名は案件名と日付から
+  const safeName = (p.name || '無題').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+  a.download = `${safeName}_${ymdKey(new Date())}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
+  toast('ローカルにダウンロードしました');
+}
+
+document.getElementById('btn-export').onclick = () => { exportCurrentProject(); };
 
 document.getElementById('btn-import').onclick = () => {
   document.getElementById('file-import').click();
