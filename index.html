@@ -2481,27 +2481,21 @@ async function saveAsPDF() {
     });
 
     const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3' });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const margin = 8;
-    const usableW = pageW - margin * 2;
-    const usableH = pageH - margin * 2;
-    const imgRatio = canvas.width / canvas.height;
-    const usableRatio = usableW / usableH;
-    let drawW, drawH;
-    if (imgRatio > usableRatio) {
-      drawW = usableW;
-      drawH = usableW / imgRatio;
-    } else {
-      drawH = usableH;
-      drawW = usableH * imgRatio;
-    }
-    const offsetX = margin + (usableW - drawW) / 2;
-    const offsetY = margin + (usableH - drawH) / 2;
-
-    // JPEG quality 0.9 で十分視認性ありつつファイルサイズ激減（37MB → 数MB級）
-    pdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', offsetX, offsetY, drawW, drawH, undefined, 'FAST');
+    // PDFページサイズをチャート内容の実寸に合わせる（A3固定だと縦に大きな余白が出るため）
+    const scale = 1.5; // html2canvas のスケールに合わせる
+    const cssPxPerMm = 96 / 25.4; // 標準 96 DPI 換算 ≈ 3.78
+    const contentWmm = (canvas.width / scale) / cssPxPerMm;
+    const contentHmm = (canvas.height / scale) / cssPxPerMm;
+    const margin = 4; // 全方向 4mm
+    const pdfW = contentWmm + margin * 2;
+    const pdfH = contentHmm + margin * 2;
+    const pdf = new jsPDF({
+      orientation: pdfW >= pdfH ? 'landscape' : 'portrait',
+      unit: 'mm',
+      format: [pdfW, pdfH],
+    });
+    // JPEG quality 0.9 で十分視認性ありつつファイルサイズ激減
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', margin, margin, contentWmm, contentHmm, undefined, 'FAST');
 
     const p = currentProject();
     const safeName = (p?.name || '工程表').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
