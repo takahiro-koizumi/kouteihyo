@@ -480,20 +480,25 @@
   /* Print split layout (top/bottom halves) */
   .print-split-sep { display: none; }
 
-  /* On-screen split view (上下表示 toggle) */
+  /* On-screen split view (上下表示 toggle) — N段対応 */
   #btn-split-view.active {
     background: #2563eb;
     color: #fff;
     border-color: #1d4ed8;
   }
-  .screen-split-half { position: relative; }
-  .screen-split-top {
+  .screen-split-row {
+    position: relative;
     border-bottom: 2px dashed #888;
     padding-bottom: 12px;
     margin-bottom: 12px;
   }
-  .screen-split-top::after,
-  .screen-split-bottom::after {
+  .screen-split-row.screen-split-last {
+    border-bottom: none;
+    padding-bottom: 0;
+    margin-bottom: 0;
+  }
+  .screen-split-row::after {
+    content: attr(data-split-label);
     position: absolute;
     right: 8px;
     top: 4px;
@@ -506,8 +511,6 @@
     pointer-events: none;
     z-index: 10;
   }
-  .screen-split-top::after { content: '前半'; }
-  .screen-split-bottom::after { content: '後半'; }
 
   /* Print */
   @media print {
@@ -2356,34 +2359,53 @@ function applySplitToWrap() {
   _applyingSplit = true;
   try {
     const totalMonths = (pe.getFullYear() - ps.getFullYear()) * 12 + (pe.getMonth() - ps.getMonth()) + 1;
-    const topMonths = Math.ceil(totalMonths / 2);
-    const bottomMonths = Math.max(1, totalMonths - topMonths);
+    // 1段あたりの月数 = ユーザーの現在の monthsToShow 選択（2/3/4/6 ヶ月ボタン）
+    const rowMonths = Math.max(2, state.view.monthsToShow || 4);
+    const numRows = Math.max(1, Math.ceil(totalMonths / rowMonths));
 
-    // 画面幅に収まるセル幅を概算（左工種パネル + 余白を差し引く）
+    // 画面幅に収まるセル幅を rowMonths 基準で算出
     const wrapWidth = wrap.clientWidth || document.documentElement.clientWidth || 1200;
     const leftPanelWidth = 320;
     const chartWidth = Math.max(400, wrapWidth - leftPanelWidth - 40);
-    const approxHalfDays = Math.max(topMonths, bottomMonths) * 31;
-    const halfDayWidth = Math.max(10, Math.min(40, Math.floor(chartWidth / approxHalfDays)));
+    const approxDays = rowMonths * 31;
+    const cellWidth = Math.max(8, Math.min(40, Math.floor(chartWidth / approxDays)));
 
-    // 前半を描画してクローン保存
-    state.view.anchorMonth = ymKey(ps);
-    state.view.monthsToShow = Math.max(2, topMonths);
-    state.view.dayWidth = halfDayWidth;
-    _origRenderForSplit();
-    const topClone = wrap.firstChild.cloneNode(true);
-    topClone.classList.add('screen-split-half', 'screen-split-top');
+    // 各段を順に描画。最後の段だけライブで残し、それより前は cloneNode で固定スナップショット化
+    const clones = [];
+    for (let i = 0; i < numRows; i++) {
+      const rowStart = new Date(ps.getFullYear(), ps.getMonth() + i * rowMonths, 1);
+      const remaining = totalMonths - i * rowMonths;
+      const thisRowMonths = Math.max(2, Math.min(rowMonths, remaining));
 
-    // 後半を描画
-    const secondAnchor = new Date(ps.getFullYear(), ps.getMonth() + topMonths, 1);
-    state.view.anchorMonth = ymKey(secondAnchor);
-    state.view.monthsToShow = Math.max(2, bottomMonths);
-    state.view.dayWidth = halfDayWidth;
-    _origRenderForSplit();
-    if (wrap.firstChild) wrap.firstChild.classList.add('screen-split-half', 'screen-split-bottom');
+      state.view.anchorMonth = ymKey(rowStart);
+      state.view.monthsToShow = thisRowMonths;
+      state.view.dayWidth = cellWidth;
+      _origRenderForSplit();
 
-    // 前半クローンを後半の上に挿入
-    wrap.insertBefore(topClone, wrap.firstChild);
+      const label = `${i + 1}/${numRows} 段（${ymKey(rowStart).replace('-', '/')} 〜）`;
+      if (i < numRows - 1) {
+        const clone = wrap.firstChild.cloneNode(true);
+        clone.classList.add('screen-split-row');
+        clone.dataset.splitLabel = label;
+        clones.push(clone);
+      } else {
+        // 最終段はライブのまま残す
+        if (wrap.firstChild) {
+          wrap.firstChild.classList.add('screen-split-row', 'screen-split-last');
+          wrap.firstChild.dataset.splitLabel = label;
+        }
+      }
+    }
+
+    // クローンを最終段の前に順に挿入（先頭の段が一番上に来る）
+    const liveFirstChild = wrap.firstChild;
+    clones.forEach(c => wrap.insertBefore(c, liveFirstChild));
+
+    // monthsToShow をユーザーの選択値に戻す（最終段の余りに変えない）
+    // → 次回 render 時 / monthsToShow ボタンのハイライト判定で正しく動くため
+    state.view.monthsToShow = rowMonths;
+    // ツールバーの月数ボタンのハイライトを正しい値で再適用
+    renderToolbarState();
   } finally {
     _applyingSplit = false;
   }
@@ -2396,8 +2418,8 @@ function toggleSplitView() {
     btn.classList.remove('active');
     if (_splitRestoreView) {
       state.view.anchorMonth = _splitRestoreView.anchorMonth;
-      state.view.monthsToShow = _splitRestoreView.monthsToShow;
       state.view.dayWidth = _splitRestoreView.dayWidth;
+      // monthsToShow は復元しない: 上下モード中に変更した1段あたりの月数を維持
       _splitRestoreView = null;
     }
     render();
@@ -2409,7 +2431,6 @@ function toggleSplitView() {
     }
     _splitRestoreView = {
       anchorMonth: state.view.anchorMonth,
-      monthsToShow: state.view.monthsToShow,
       dayWidth: state.view.dayWidth,
     };
     _splitView = true;
