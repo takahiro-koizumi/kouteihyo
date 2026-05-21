@@ -2926,12 +2926,13 @@ function scheduleDbxAutoSave() {
   if (!dbxToken) return;
   _dbxPending = true;
   if (dbxAutoSaveTimer) clearTimeout(dbxAutoSaveTimer);
-  dbxAutoSaveTimer = setTimeout(() => { dbxSave(true); dbxAutoSaveTimer = null; }, 2000);
+  // 編集が1秒止まったら保存（相手端末への反映を速めるため短め）
+  dbxAutoSaveTimer = setTimeout(() => { dbxSave(true); dbxAutoSaveTimer = null; }, 1000);
 }
 
 // ====================================================================
 // Cross-device sync: 他端末で更新があったら自動で取り込んで画面に反映
-// (genba-board 同等の 5 秒ポーリング)
+// (2 秒間隔ポーリング + visibilitychange/focus 即時)
 // ====================================================================
 async function dbxCheckRemoteRev() {
   if (!dbxToken) return null;
@@ -2974,8 +2975,8 @@ async function dbxAutoPullIfChanged() {
   toast('他端末の変更を反映しました');
 }
 
-// 5秒ごとに他端末の更新をチェック
-const DBX_POLL_INTERVAL_MS = 5 * 1000;
+// 2秒ごとに他端末の更新をチェック（複数人で同時に開いている時、変更を素早く反映するため短め）
+const DBX_POLL_INTERVAL_MS = 2 * 1000;
 setInterval(dbxAutoPullIfChanged, DBX_POLL_INTERVAL_MS);
 
 // ページ復帰時(モバイル裏→表、別タブから戻る等)は即チェック。
