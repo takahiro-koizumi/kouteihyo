@@ -2635,7 +2635,7 @@ document.getElementById('btn-split-view').onclick = toggleSplitView;
 // Settings modal
 // ====================================================================
 function openSettingsModal() {
-  document.getElementById('dbx-file-path').value = localStorage.getItem('dbx_file_path') || DBX_DEFAULT_FILE_PATH;
+  document.getElementById('dbx-file-path').value = localStorage.getItem('kouteihyo_dbx_file_path') || DBX_DEFAULT_FILE_PATH;
   document.getElementById('holidays-text').value = Object.entries(state.holidays)
     .map(([d, name]) => d + ' ' + name).join('\n');
   document.getElementById('opt-show-weekends').checked = state.options.showWeekends;
@@ -2667,7 +2667,7 @@ document.getElementById('settings-save').onclick = () => {
 document.getElementById('btn-dbx-save-path').onclick = () => {
   let p = document.getElementById('dbx-file-path').value.trim() || DBX_DEFAULT_FILE_PATH;
   if (!p.startsWith('/')) p = '/' + p;
-  localStorage.setItem('dbx_file_path', p);
+  localStorage.setItem('kouteihyo_dbx_file_path', p);
   document.getElementById('dbx-file-path').value = p;
   toast('保存先パスを更新');
 };
@@ -2711,8 +2711,10 @@ let dbxLastSync = null;
 let _dbxPending = false;
 let _lastDbxRev = null;
 
+// localStorageキーはアプリ別接頭辞を付ける。現場配置ボードと同一github.ioドメインで
+// localStorageを共有するため、'dbx_file_path'のままだと両アプリが保存先を相互に奪い合う。
 function dbxFilePath() {
-  return localStorage.getItem('dbx_file_path') || DBX_DEFAULT_FILE_PATH;
+  return localStorage.getItem('kouteihyo_dbx_file_path') || DBX_DEFAULT_FILE_PATH;
 }
 
 function setDbxStatus(state, text) {
@@ -3013,9 +3015,9 @@ window.addEventListener('beforeunload', (e) => {
   localStorage.setItem('dbx_app_key', DBX_APP_KEY);
 
   // 旧既定パス /工程表/schedule.json からの自動アップグレード
-  const savedPath = localStorage.getItem('dbx_file_path');
+  const savedPath = localStorage.getItem('kouteihyo_dbx_file_path');
   if (!savedPath || savedPath === '/工程表/schedule.json') {
-    localStorage.setItem('dbx_file_path', DBX_DEFAULT_FILE_PATH);
+    localStorage.setItem('kouteihyo_dbx_file_path', DBX_DEFAULT_FILE_PATH);
   }
 
   // Dropbox callback handling
