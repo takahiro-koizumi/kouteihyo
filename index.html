@@ -2710,6 +2710,7 @@ let dbxAutoSaveTimer = null;
 let dbxLastSync = null;
 let _dbxPending = false;
 let _lastDbxRev = null;
+let _dbxFileId = '';   // 実際に読み書きしている Dropbox ファイルの id（同一ファイルか診断用）
 
 // localStorageキーはアプリ別接頭辞を付ける。現場配置ボードと同一github.ioドメインで
 // localStorageを共有するため、'dbx_file_path'のままだと両アプリが保存先を相互に奪い合う。
@@ -2883,7 +2884,7 @@ async function dbxLoad(silent) {
       const json = await resp.json();
       const apiResult = resp.headers.get('Dropbox-API-Result');
       if (apiResult) {
-        try { const m = JSON.parse(apiResult); if (m.rev) _lastDbxRev = m.rev; } catch(e) {}
+        try { const m = JSON.parse(apiResult); if (m.rev) _lastDbxRev = m.rev; if (m.id) _dbxFileId = m.id; } catch(e) {}
       }
       dbxLastSync = new Date().toLocaleTimeString('ja-JP');
       setDbxStatus('connected', '同期 ' + dbxLastSync);
@@ -2958,7 +2959,9 @@ async function dbxAutoPullIfChanged() {
   if (!dbxToken) return;
   _dbxPollN++;
   const _hb = '⟳' + _dbxPollN + ' ';            // 同期インジケーターの拍動（診断用）
-  const _t = ' ' + new Date().toLocaleTimeString('ja-JP');
+  const _t = ' ' + new Date().toLocaleTimeString('ja-JP')
+    + ' f:' + (_dbxFileId ? _dbxFileId.slice(-6) : '?')
+    + ' r:' + (_lastDbxRev ? String(_lastDbxRev).slice(-6) : '?');
   // 保存待ち（編集直後・または保存失敗）の時は、保留中の保存を片付けてから戻る。
   // こうしないと保存が一度失敗しただけで _dbxPending が永久に残り、自動取り込みが
   // ずっと止まる（＝手動リロードでしか反映されない不具合の一因）。
