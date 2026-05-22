@@ -2954,6 +2954,11 @@ async function dbxCheckRemoteRev() {
   } catch (e) { return null; }
 }
 
+// 他端末と共有するのは案件データ(projects/projectOrder/holidays)のみ。
+// 表示中の案件(currentProjectId)・表示範囲(view)・表示オプションは端末ごとにローカル保持。
+function syncFingerprint(s) {
+  return JSON.stringify({ projects: s.projects, projectOrder: s.projectOrder, holidays: s.holidays });
+}
 let _dbxPollN = 0;
 async function dbxAutoPullIfChanged() {
   if (!dbxToken) return;
@@ -2985,11 +2990,16 @@ async function dbxAutoPullIfChanged() {
   // 取りこぼすことがあるため使わない（手動リロードでしか反映されない不具合の原因）。
   const remote = await dbxLoad(true);
   if (!remote) { setDbxStatus('error', _hb + '取得失敗' + _t); return; }
-  if (JSON.stringify(remote) === JSON.stringify(state)) {
-    setDbxStatus('connected', _hb + '最新' + _t); return; // 実際は同じ
+  if (syncFingerprint(remote) === syncFingerprint(state)) {
+    setDbxStatus('connected', _hb + '最新' + _t); return; // 案件データに差分なし
   }
   console.log('[Dropbox] 他端末の変更を反映');
+  // 表示中の案件・表示範囲は自分の端末のものを維持（他端末の選択に飛ばされない）
+  const _lv = { cur: state.currentProjectId, view: state.view, options: state.options };
   state = migrate(remote);
+  if (_lv.cur && state.projects[_lv.cur]) state.currentProjectId = _lv.cur;
+  if (_lv.view) state.view = _lv.view;
+  if (_lv.options) state.options = _lv.options;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
   setDbxStatus('connected', _hb + '★反映' + _t);
@@ -3048,16 +3058,20 @@ window.addEventListener('beforeunload', (e) => {
     setDbxStatus('connected', '接続済');
     // On first load, try pull silently
     const remote = await dbxLoad(true);
-    if (remote && JSON.stringify(remote) !== JSON.stringify(state)) {
-      // Use remote if local is empty, else ask
+    if (remote && syncFingerprint(remote) !== syncFingerprint(state)) {
+      // 表示中の案件・表示範囲は端末ごとにローカル保持
+      const _lv = { cur: state.currentProjectId, view: state.view, options: state.options };
+      let applied = false;
       if (!state.projectOrder.length) {
-        state = migrate(remote);
+        state = migrate(remote); applied = true;
+      } else if (confirm('Dropboxに別のデータがあります。取り込みますか？\n(キャンセル＝ローカルを保持)')) {
+        state = migrate(remote); applied = true;
+      }
+      if (applied) {
+        if (_lv.cur && state.projects[_lv.cur]) state.currentProjectId = _lv.cur;
+        if (_lv.view) state.view = _lv.view;
+        if (_lv.options) state.options = _lv.options;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      } else {
-        if (confirm('Dropboxに別のデータがあります。取り込みますか？\n(キャンセル＝ローカルを保持)')) {
-          state = migrate(remote);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-        }
       }
     }
   } else {
