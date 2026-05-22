@@ -2706,11 +2706,11 @@ function toast(msg) {
 const DBX_APP_KEY = 'w0akss3w157oa53';
 const DBX_DEFAULT_FILE_PATH = '/大田原工業　工事部/☆施工中/★工程表/kouteihyo.json';
 let dbxToken = localStorage.getItem('dbx_token') || null;
+let dbxPathRoot = null;
 let dbxAutoSaveTimer = null;
 let dbxLastSync = null;
 let _dbxPending = false;
 let _lastDbxRev = null;
-let _dbxFileId = '';   // 実際に読み書きしている Dropbox ファイルの id（同一ファイルか診断用）
 
 // localStorageキーはアプリ別接頭辞を付ける。現場配置ボードと同一github.ioドメインで
 // localStorageを共有するため、'dbx_file_path'のままだと両アプリが保存先を相互に奪い合う。
@@ -2810,11 +2810,39 @@ async function dbxRefreshToken() {
   return false;
 }
 
+// Dropbox Business: チーム共有フォルダはチームスペース名前空間に存在する。
+// パスルートを指定しないと絶対パスが各メンバーのホーム名前空間で解決され、
+// kouteihyo.json がメンバーごとに別々に作られて共有できなくなる。
+async function dbxEnsurePathRoot() {
+  if (dbxPathRoot || !dbxToken) return;
+  try {
+    const doFetch = () => fetch('https://api.dropboxapi.com/2/users/get_current_account', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + dbxToken },
+    });
+    let resp = await doFetch();
+    if (resp.status === 401) {
+      const ok = await dbxRefreshToken();
+      if (ok) resp = await doFetch();
+    }
+    if (!resp.ok) { console.warn('[Dropbox] get_current_account failed:', resp.status); return; }
+    const acct = await resp.json();
+    const rootNs = acct && acct.root_info && acct.root_info.root_namespace_id;
+    if (rootNs) {
+      dbxPathRoot = String(rootNs);
+      console.log('[Dropbox] path root (team space) =', dbxPathRoot);
+    }
+  } catch (e) {
+    console.warn('[Dropbox] get_current_account error:', e);
+  }
+}
+
 function dbxDisconnect() {
   if (!confirm('Dropboxとの接続を切りますか？（ローカルデータは残ります）')) return;
   localStorage.removeItem('dbx_token');
   localStorage.removeItem('dbx_refresh');
   dbxToken = null;
+  dbxPathRoot = null;
   dbxLastSync = null;
   setDbxStatus('', '未接続');
 }
@@ -2830,6 +2858,7 @@ async function dbxApiCall(url, args, body) {
     'Authorization': 'Bearer ' + dbxToken,
     'Dropbox-API-Arg': asciiEscapeJSON(args),
   };
+  if (dbxPathRoot) headers['Dropbox-API-Path-Root'] = JSON.stringify({ '.tag': 'root', 'root': dbxPathRoot });
   if (body) headers['Content-Type'] = 'application/octet-stream';
   const doFetch = () => fetch(url, { method: 'POST', headers, body: body || undefined });
   let resp = await doFetch();
@@ -2884,7 +2913,7 @@ async function dbxLoad(silent) {
       const json = await resp.json();
       const apiResult = resp.headers.get('Dropbox-API-Result');
       if (apiResult) {
-        try { const m = JSON.parse(apiResult); if (m.rev) _lastDbxRev = m.rev; if (m.id) _dbxFileId = m.id; } catch(e) {}
+        try { const m = JSON.parse(apiResult); if (m.rev) _lastDbxRev = m.rev; } catch(e) {}
       }
       dbxLastSync = new Date().toLocaleTimeString('ja-JP');
       setDbxStatus('connected', '同期 ' + dbxLastSync);
@@ -2938,9 +2967,11 @@ function scheduleDbxAutoSave() {
 async function dbxCheckRemoteRev() {
   if (!dbxToken) return null;
   try {
+    const metaHeaders = { 'Authorization': 'Bearer ' + dbxToken, 'Content-Type': 'application/json' };
+    if (dbxPathRoot) metaHeaders['Dropbox-API-Path-Root'] = JSON.stringify({ '.tag': 'root', 'root': dbxPathRoot });
     const doFetch = () => fetch('https://api.dropboxapi.com/2/files/get_metadata', {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + dbxToken, 'Content-Type': 'application/json' },
+      headers: metaHeaders,
       body: JSON.stringify({ path: dbxFilePath() })
     });
     let resp = await doFetch();
@@ -2959,50 +2990,31 @@ async function dbxCheckRemoteRev() {
 function syncFingerprint(s) {
   return JSON.stringify({ projects: s.projects, projectOrder: s.projectOrder, holidays: s.holidays });
 }
-let _dbxPollN = 0;
 async function dbxAutoPullIfChanged() {
   if (!dbxToken) return;
-  _dbxPollN++;
-  const _hb = '⟳' + _dbxPollN + ' ';            // 同期インジケーターの拍動（診断用）
-  const _t = ' ' + new Date().toLocaleTimeString('ja-JP')
-    + ' f:' + (_dbxFileId ? _dbxFileId.slice(-6) : '?')
-    + ' r:' + (_lastDbxRev ? String(_lastDbxRev).slice(-6) : '?');
-  // 保存待ち（編集直後・または保存失敗）の時は、保留中の保存を片付けてから戻る。
-  // こうしないと保存が一度失敗しただけで _dbxPending が永久に残り、自動取り込みが
-  // ずっと止まる（＝手動リロードでしか反映されない不具合の一因）。
+  // 保存待ちなら保留中の保存を片付けてから戻る（保存失敗で同期が止まらないように）
   if (_dbxPending) {
-    setDbxStatus('syncing', _hb + '保存待ち' + _t);
     if (dbxAutoSaveTimer) { clearTimeout(dbxAutoSaveTimer); dbxAutoSaveTimer = null; }
     dbxSave(true);
     return;
   }
   if (document.visibilityState !== 'visible') return;
-  // モーダル/コンテキストメニュー表示中・ドラッグ操作中は触らない
-  // モーダル/コンテキストメニューは常にDOMに在り、表示中だけ .show が付く。
-  // 以前は .show 無しで判定していたため常に「操作中」となり自動取り込みが一切
-  // 動かなかった（＝手動リロードでしか反映されない不具合の真因）。
+  // モーダル/メニューは常にDOMに在り表示中だけ .show が付く。表示中のみ取り込みを止める
   if (document.querySelector('.modal-back.show') || document.querySelector('.ctx-menu.show')
-      || document.body.classList.contains('dragging')) {
-    setDbxStatus('connected', _hb + '操作中' + _t); return;
-  }
-  // 毎回ダウンロードして内容を比較する。
-  // rev(メタデータ)での差分判定は、共有フォルダ越しの他アカウントの変更を
-  // 取りこぼすことがあるため使わない（手動リロードでしか反映されない不具合の原因）。
+      || document.body.classList.contains('dragging')) return;
+  // 毎回ダウンロードし、案件データに差分があれば取り込む
   const remote = await dbxLoad(true);
-  if (!remote) { setDbxStatus('error', _hb + '取得失敗' + _t); return; }
-  if (syncFingerprint(remote) === syncFingerprint(state)) {
-    setDbxStatus('connected', _hb + '最新' + _t); return; // 案件データに差分なし
-  }
+  if (!remote) return;
+  if (syncFingerprint(remote) === syncFingerprint(state)) return;
   console.log('[Dropbox] 他端末の変更を反映');
   // 表示中の案件・表示範囲は自分の端末のものを維持（他端末の選択に飛ばされない）
-  const _lv = { cur: state.currentProjectId, view: state.view, options: state.options };
+  const lv = { cur: state.currentProjectId, view: state.view, options: state.options };
   state = migrate(remote);
-  if (_lv.cur && state.projects[_lv.cur]) state.currentProjectId = _lv.cur;
-  if (_lv.view) state.view = _lv.view;
-  if (_lv.options) state.options = _lv.options;
+  if (lv.cur && state.projects[lv.cur]) state.currentProjectId = lv.cur;
+  if (lv.view) state.view = lv.view;
+  if (lv.options) state.options = lv.options;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
-  setDbxStatus('connected', _hb + '★反映' + _t);
   toast('他端末の変更を反映しました');
 }
 
@@ -3055,6 +3067,7 @@ window.addEventListener('beforeunload', (e) => {
   // Dropbox callback handling
   const handled = await dbxHandleCallback();
   if (dbxToken) {
+    await dbxEnsurePathRoot();
     setDbxStatus('connected', '接続済');
     // On first load, try pull silently
     const remote = await dbxLoad(true);
