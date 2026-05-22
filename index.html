@@ -2953,24 +2953,40 @@ async function dbxCheckRemoteRev() {
   } catch (e) { return null; }
 }
 
+let _dbxPollN = 0;
 async function dbxAutoPullIfChanged() {
   if (!dbxToken) return;
-  if (_dbxPending) return; // 未送信のローカル変更がある時は上書きしない
+  _dbxPollN++;
+  const _hb = '⟳' + _dbxPollN + ' ';            // 同期インジケーターの拍動（診断用）
+  const _t = ' ' + new Date().toLocaleTimeString('ja-JP');
+  // 保存待ち（編集直後・または保存失敗）の時は、保留中の保存を片付けてから戻る。
+  // こうしないと保存が一度失敗しただけで _dbxPending が永久に残り、自動取り込みが
+  // ずっと止まる（＝手動リロードでしか反映されない不具合の一因）。
+  if (_dbxPending) {
+    setDbxStatus('syncing', _hb + '保存待ち' + _t);
+    if (dbxAutoSaveTimer) { clearTimeout(dbxAutoSaveTimer); dbxAutoSaveTimer = null; }
+    dbxSave(true);
+    return;
+  }
   if (document.visibilityState !== 'visible') return;
   // モーダル/コンテキストメニュー表示中・ドラッグ操作中は触らない
-  if (document.querySelector('.modal-back')) return;
-  if (document.querySelector('.ctx-menu')) return;
-  if (document.body.classList.contains('dragging')) return;
+  if (document.querySelector('.modal-back') || document.querySelector('.ctx-menu')
+      || document.body.classList.contains('dragging')) {
+    setDbxStatus('connected', _hb + '操作中' + _t); return;
+  }
   // 毎回ダウンロードして内容を比較する。
   // rev(メタデータ)での差分判定は、共有フォルダ越しの他アカウントの変更を
   // 取りこぼすことがあるため使わない（手動リロードでしか反映されない不具合の原因）。
   const remote = await dbxLoad(true);
-  if (!remote) return;
-  if (JSON.stringify(remote) === JSON.stringify(state)) return; // 実際は同じ
+  if (!remote) { setDbxStatus('error', _hb + '取得失敗' + _t); return; }
+  if (JSON.stringify(remote) === JSON.stringify(state)) {
+    setDbxStatus('connected', _hb + '最新' + _t); return; // 実際は同じ
+  }
   console.log('[Dropbox] 他端末の変更を反映');
   state = migrate(remote);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
+  setDbxStatus('connected', _hb + '★反映' + _t);
   toast('他端末の変更を反映しました');
 }
 
