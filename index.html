@@ -2973,7 +2973,10 @@ async function dbxAutoPullIfChanged() {
   }
   if (document.visibilityState !== 'visible') return;
   // モーダル/コンテキストメニュー表示中・ドラッグ操作中は触らない
-  if (document.querySelector('.modal-back') || document.querySelector('.ctx-menu')
+  // モーダル/コンテキストメニューは常にDOMに在り、表示中だけ .show が付く。
+  // 以前は .show 無しで判定していたため常に「操作中」となり自動取り込みが一切
+  // 動かなかった（＝手動リロードでしか反映されない不具合の真因）。
+  if (document.querySelector('.modal-back.show') || document.querySelector('.ctx-menu.show')
       || document.body.classList.contains('dragging')) {
     setDbxStatus('connected', _hb + '操作中' + _t); return;
   }
