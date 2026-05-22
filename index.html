@@ -2961,14 +2961,13 @@ async function dbxAutoPullIfChanged() {
   if (document.querySelector('.modal-back')) return;
   if (document.querySelector('.ctx-menu')) return;
   if (document.body.classList.contains('dragging')) return;
-  // メタデータ軽量チェック：確実に同じ rev ならスキップ
-  const remoteRev = await dbxCheckRemoteRev();
-  if (remoteRev && _lastDbxRev && remoteRev === _lastDbxRev) return;
-  // 変化の可能性あり → silent download して内容を比較
+  // 毎回ダウンロードして内容を比較する。
+  // rev(メタデータ)での差分判定は、共有フォルダ越しの他アカウントの変更を
+  // 取りこぼすことがあるため使わない（手動リロードでしか反映されない不具合の原因）。
   const remote = await dbxLoad(true);
   if (!remote) return;
   if (JSON.stringify(remote) === JSON.stringify(state)) return; // 実際は同じ
-  console.log('[Dropbox] 他端末の変更を反映 (rev:', remoteRev || '?', ')');
+  console.log('[Dropbox] 他端末の変更を反映');
   state = migrate(remote);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
