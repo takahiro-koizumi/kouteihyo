@@ -1763,6 +1763,7 @@ function startBarDrag(e, task, bar, subtask) {
 
   e.preventDefault();
   bar.classList.add('dragging');
+  document.body.classList.add('dragging');
   const dw = dayWidth();
   const startPx = px;
   const origStart = parseYMD(tgt.start);
@@ -1792,6 +1793,7 @@ function startBarDrag(e, task, bar, subtask) {
   }
   function onUp() {
     bar.classList.remove('dragging');
+    document.body.classList.remove('dragging');
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
     document.removeEventListener('touchmove', onMove);
@@ -2762,6 +2764,9 @@ async function dbxHandleCallback() {
   if (!code) return false;
   const verifier = localStorage.getItem('dbx_verifier');
   if (!verifier) {
+    console.error('[Dropbox] PKCE code_verifier missing. localStorageが別タブで消えた可能性。');
+    setDbxStatus('error', 'PKCE失敗 再接続してください');
+    alert('Dropbox認証に失敗しました。localStorageが消えたかブラウザを切り替えた可能性があります。再度「Dropboxに接続」を押してください。');
     history.replaceState({}, '', window.location.pathname);
     return false;
   }
@@ -3005,6 +3010,14 @@ async function dbxAutoPullIfChanged() {
   // 毎回ダウンロードし、案件データに差分があれば取り込む
   const remote = await dbxLoad(true);
   if (!remote) return;
+  // 空データ上書き防御：リモートのprojectsが空でローカルに案件があれば自動pull中止
+  const remoteProjCount = remote.projects ? Object.keys(remote.projects).length : 0;
+  const localProjCount = state.projects ? Object.keys(state.projects).length : 0;
+  if (remoteProjCount === 0 && localProjCount > 0) {
+    console.warn('[Dropbox] Remote projects empty but local has data. Auto-pull skipped.');
+    setDbxStatus('error', '空データ検出 手動取得推奨');
+    return;
+  }
   if (syncFingerprint(remote) === syncFingerprint(state)) return;
   console.log('[Dropbox] 他端末の変更を反映');
   // 表示中の案件・表示範囲は自分の端末のものを維持（他端末の選択に飛ばされない）
