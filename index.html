@@ -2212,9 +2212,20 @@ document.getElementById('btn-today').onclick = () => {
   saveState(); render();
 };
 
+// 指定した月数分を画面幅に収める日幅を計算（applySplitToWrap と同じロジック）
+function computeFitDayWidth(monthsToShow) {
+  const wrapWidth = wrap.clientWidth || document.documentElement.clientWidth || 1200;
+  const leftPanelWidth = 320;
+  const chartWidth = Math.max(400, wrapWidth - leftPanelWidth - 40);
+  const approxDays = Math.max(2, monthsToShow) * 31;
+  return Math.max(8, Math.min(40, Math.floor(chartWidth / approxDays)));
+}
+
 document.querySelectorAll('.toolbar [data-months]').forEach(btn => {
   btn.onclick = () => {
     state.view.monthsToShow = +btn.dataset.months;
+    // 月数切替時に画面幅へフィット（2ヶ月で右が余白／6ヶ月で潰れるのを防ぐ）
+    state.view.dayWidth = computeFitDayWidth(state.view.monthsToShow);
     saveState(); render();
   };
 });
@@ -2228,7 +2239,8 @@ document.getElementById('btn-zoom-out').onclick = () => {
   saveState(); render();
 };
 document.getElementById('btn-zoom-reset').onclick = () => {
-  state.view.dayWidth = 28;
+  // 100%ボタンは現在の月数を画面幅に合わせる挙動に統一
+  state.view.dayWidth = computeFitDayWidth(state.view.monthsToShow);
   saveState(); render();
 };
 
@@ -2240,6 +2252,7 @@ document.getElementById('btn-fit-period').onclick = () => {
   state.view.anchorMonth = ymKey(ps);
   const months = Math.max(1, Math.ceil((pe.getMonth() - ps.getMonth() + (pe.getFullYear()-ps.getFullYear())*12) + 1));
   state.view.monthsToShow = Math.min(12, Math.max(2, months));
+  state.view.dayWidth = computeFitDayWidth(state.view.monthsToShow);
   saveState(); render();
 };
 
