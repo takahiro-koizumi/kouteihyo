@@ -512,6 +512,13 @@
     z-index: 10;
   }
 
+  /* 印刷／PDF出力用クローン (.print-half / .screen-split-row) では「＋ 工種を追加」等の編集ボタンを非表示。
+     @media print の外に置くことで、saveAsPDF (html2canvas) の出力にも効かせる。 */
+  .print-half .task-row-add,
+  .print-half .task-row-subadd,
+  .screen-split-row .task-row-add,
+  .screen-split-row .task-row-subadd { display: none !important; }
+
   /* Print */
   @media print {
     .toolbar, .modal-back, .ctx-menu { display: none !important; }
@@ -557,19 +564,14 @@
       margin: 2mm 0;
     }
     .print-half { page-break-inside: avoid; }
-    /* Compact rows for print so both halves fit on one A3 landscape page */
-    .print-half .task-row { height: 22px !important; }
-    .print-half .task-row.sub { height: 18px !important; }
-    .print-half .task-row-add,
-    .print-half .task-row-subadd { display: none !important; }
+    /* 行の高さ縮小は撤去（2026-05-28 修正）。
+       左の task-row だけ CSS で縮めても、右のバーは JS が 36px/28px の累積 top で位置決めしているため、
+       下の工種ほど左右がズレていた。両側の行高を一致させて整列を優先する。
+       「＋ 工種を追加」等の追加ボタン非表示は @media print 外（下記グローバル）に移動。 */
 
-    /* Same compacting for ユーザー指定のN段表示 (上下表示) on print */
+    /* N段表示（上下表示）の印刷時のみ段間に区切り線を追加 */
     .screen-split-row { page-break-inside: avoid; padding-bottom: 4px !important; margin-bottom: 4px !important; border-bottom-style: dotted !important; }
     .screen-split-row.screen-split-last { border-bottom: none !important; padding-bottom: 0 !important; margin-bottom: 0 !important; }
-    .screen-split-row .task-row { height: 22px !important; }
-    .screen-split-row .task-row.sub { height: 18px !important; }
-    .screen-split-row .task-row-add,
-    .screen-split-row .task-row-subadd { display: none !important; }
     /* 段ラベル（前半/後半など）は紙では冗長なので非表示 */
     .screen-split-row::after { display: none !important; }
     /* Compact project header (memo is multiline, truncate for print) */
@@ -633,6 +635,7 @@
     <span class="spacer"></span>
 
     <button id="btn-fit-period" title="工期に合わせて表示">⤢工期</button>
+    <button id="btn-toggle-all" title="大項目を一斉に折りたたむ／展開（現在の状態に応じて自動切替）">▼▶ 大項</button>
     <button id="btn-split-view" title="上下表示 — 工期を前半/後半の2段に分割して全体を1画面表示">⇅ 上下</button>
     <button id="btn-export" title="エクスポート — Dropbox接続中なら案件の工程表フォルダにschedule.jsonとして保存、未接続ならローカルダウンロード">↓</button>
     <button id="btn-import" title="JSONインポート">↑</button>
@@ -2240,6 +2243,18 @@ document.getElementById('btn-fit-period').onclick = () => {
   saveState(); render();
 };
 
+// 大項目を一斉に折りたたむ／展開。1つでも展開中なら全て折りたたみ、全て折りたたみ中なら全展開。
+document.getElementById('btn-toggle-all').onclick = () => {
+  const p = currentProject();
+  if (!p || !p.tasks || p.tasks.length === 0) return;
+  const anyExpanded = p.tasks.some(t => !t.collapsed);
+  const newCollapsed = anyExpanded; // 展開があれば → 全て折りたたみ／無ければ → 全展開
+  p.tasks.forEach(t => { t.collapsed = newCollapsed; });
+  saveState();
+  render();
+  toast(newCollapsed ? '大項目を全て折りたたみました' : '大項目を全て展開しました');
+};
+
 document.getElementById('btn-save').onclick = () => {
   saveState();
   toast('保存しました');
@@ -2454,6 +2469,10 @@ async function saveAsPDF() {
   btn.disabled = true;
   btn.textContent = '📄 生成中…';
   let printSetupApplied = false;
+  // wrap は flex:1 で画面の余白分まで高さを持つため、PDF生成中は内容に合わせて縮める
+  const _origWrapFlex = wrap.style.flex;
+  const _origWrapHeight = wrap.style.height;
+  const _origWrapOverflow = wrap.style.overflow;
   try {
     // 必要時のみ CDN ロード（社内ネットワークでCDNブロックされている場合は失敗）
     await _loadScriptOnce('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
@@ -2462,13 +2481,20 @@ async function saveAsPDF() {
     // beforeprint と同じレイアウト調整を適用（折りたたみ・コンパクト化）
     window.dispatchEvent(new Event('beforeprint'));
     printSetupApplied = true;
+
+    // wrap をコンテンツ実寸に縮める（画面の余白を含めない）
+    wrap.style.flex = '0 0 auto';
+    wrap.style.height = 'auto';
+    wrap.style.overflow = 'visible';
+
     // レイアウトが落ち着くまで待機
     await new Promise(r => setTimeout(r, 150));
 
-    // ガント部分の wrap 全体を target に
+    // ガント部分の wrap 全体を target に。コンテンツの実寸を取得するため getBoundingClientRect も併用
     const target = wrap;
-    const fullWidth = target.scrollWidth;
-    const fullHeight = target.scrollHeight;
+    const rect = target.getBoundingClientRect();
+    const fullWidth = Math.ceil(Math.max(target.scrollWidth, rect.width));
+    const fullHeight = Math.ceil(Math.max(target.scrollHeight, rect.height));
 
     const canvas = await html2canvas(target, {
       scale: 1.5, // 2x→1.5x で約半分のピクセル数、印字には十分
@@ -2507,6 +2533,10 @@ async function saveAsPDF() {
     console.error('[PDF] error:', e);
     alert('PDF生成に失敗しました。\n' + e.message + '\n\n代わりに「🖨 印刷」→「Microsoft Print to PDF」でもPDF保存できます。');
   } finally {
+    // wrap の元スタイルを必ず復元
+    wrap.style.flex = _origWrapFlex;
+    wrap.style.height = _origWrapHeight;
+    wrap.style.overflow = _origWrapOverflow;
     if (printSetupApplied) window.dispatchEvent(new Event('afterprint'));
     btn.disabled = false;
     btn.textContent = origLabel;
