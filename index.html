@@ -990,6 +990,16 @@ function migrate(s) {
       t.subtasks.forEach(st => {
         if (typeof st.qty !== 'string')  st.qty = '';
         if (typeof st.unit !== 'string') st.unit = '';
+        // 複数バー対応(schema v3): 中項目も bars が無ければ start/end から1本生成
+        if (!Array.isArray(st.bars) || st.bars.length === 0) {
+          st.bars = [{ id: uid('b'), start: st.start, end: st.end, label: '' }];
+        } else {
+          st.bars.forEach(b => {
+            if (!b.id) b.id = uid('b');
+            if (typeof b.label !== 'string') b.label = '';
+          });
+        }
+        syncTaskEnvelope(st);
       });
     });
     if (!Array.isArray(p.milestones)) p.milestones = [];
@@ -1213,6 +1223,11 @@ function addSubtask(projId, taskId, data) {
     id, name: '中項目', start, end, memo: '',
   }, data || {});
   st.id = id;
+  // 複数バー対応: 中項目も既定で1本のバーを持たせる（複製時など data.bars があればそれを使う）
+  if (!Array.isArray(st.bars) || st.bars.length === 0) {
+    st.bars = [{ id: uid('b'), start: st.start, end: st.end, label: '' }];
+  }
+  syncTaskEnvelope(st);
   if (!Array.isArray(t.subtasks)) t.subtasks = [];
   t.subtasks.push(st);
   p.updatedAt = new Date().toISOString();
@@ -1311,6 +1326,49 @@ function deleteBar(projId, taskId, barId) {
   t.bars = t.bars.filter(x => x.id !== barId);
   syncTaskEnvelope(t);
   p.updatedAt = new Date().toISOString();
+  saveState();
+}
+
+// ===== 中項目(subtask)の複数バー =====
+// st.bars = [{id, start, end, label}]。st.start/end は全バーの最小/最大として同期保持（syncTaskEnvelopeを流用）。
+function findSub(projId, taskId, subId) {
+  const p = state.projects[projId];
+  if (!p) return null;
+  const t = p.tasks.find(x => x.id === taskId);
+  if (!t) return null;
+  const st = (t.subtasks || []).find(x => x.id === subId);
+  if (!st) return null;
+  return { p, t, st };
+}
+function addSubBar(projId, taskId, subId, data) {
+  const r = findSub(projId, taskId, subId);
+  if (!r) return null;
+  if (!Array.isArray(r.st.bars)) r.st.bars = [];
+  const id = uid('b');
+  const bar = Object.assign({ id, start: r.st.start, end: r.st.end, label: '' }, data || {});
+  bar.id = id;
+  r.st.bars.push(bar);
+  syncTaskEnvelope(r.st);
+  r.p.updatedAt = new Date().toISOString();
+  saveState();
+  return bar;
+}
+function updateSubBar(projId, taskId, subId, barId, patch) {
+  const r = findSub(projId, taskId, subId);
+  if (!r || !Array.isArray(r.st.bars)) return;
+  const b = r.st.bars.find(x => x.id === barId);
+  if (!b) return;
+  Object.assign(b, patch);
+  syncTaskEnvelope(r.st);
+  r.p.updatedAt = new Date().toISOString();
+  saveState();
+}
+function deleteSubBar(projId, taskId, subId, barId) {
+  const r = findSub(projId, taskId, subId);
+  if (!r || !Array.isArray(r.st.bars)) return;
+  r.st.bars = r.st.bars.filter(x => x.id !== barId);
+  syncTaskEnvelope(r.st);
+  r.p.updatedAt = new Date().toISOString();
   saveState();
 }
 
@@ -1773,11 +1831,13 @@ function renderGantt() {
 
     // Bar(s)
     if (r.kind === 'sub') {
-      // 中項目：start〜end を稼働日セグメントで途切れさせて描画（従来通り）
+      // 中項目：st.bars の各バーを独立した区間として描画（1行に複数バー可）。
+      // 各バーは稼働日セグメントで途切れさせて描画。
       const st = r.subtask;
-      const ts = parseYMD(st.start);
-      const te = parseYMD(st.end);
-      if (ts && te) {
+      (st.bars || []).forEach((sb, sbIdx) => {
+        const ts = parseYMD(sb.start);
+        const te = parseYMD(sb.end);
+        if (!ts || !te) return;
         const wd = workingDaysBetween(ts, te);
         const segments = computeWorkSegments(ts, te);
         const visibleSegs = segments
@@ -1788,6 +1848,8 @@ function renderGantt() {
             isLast:  seg === segments[segments.length - 1]
           }))
           .filter(s => s.hi > s.lo);
+        const isFirstBar = sbIdx === 0;
+        const dispLabel = (sb.label && sb.label.trim()) ? sb.label : (isFirstBar ? st.name : '');
         visibleSegs.forEach((s) => {
           const bar = document.createElement('div');
           bar.className = 'bar sub seg';
@@ -1799,21 +1861,22 @@ function renderGantt() {
           if (!s.isLast)  bar.style.borderTopRightRadius = '0', bar.style.borderBottomRightRadius = '0';
           bar.dataset.taskId = t.id;
           bar.dataset.subId = st.id;
-          bar.title = '【中項目】' + st.name + '\n'
-            + st.start + ' 〜 ' + st.end + '（実稼働 ' + wd + ' 日）'
+          bar.dataset.barId = sb.id;
+          bar.title = '【中項目】' + (dispLabel || st.name) + '\n'
+            + sb.start + ' 〜 ' + sb.end + '（実稼働 ' + wd + ' 日）'
             + (st.memo ? '\n' + st.memo : '');
           bar.innerHTML = `
             ${s.isFirst ? '<span class="resize left"></span>' : ''}
-            <span class="bar-label">${s.isFirst ? escapeHtml(st.name) : ''}</span>
+            <span class="bar-label">${s.isFirst ? escapeHtml(dispLabel) : ''}</span>
             ${s.isLast  ? '<span class="resize right"></span>' : ''}
           `;
-          bar.onmousedown = (e) => startBarDrag(e, t, bar, st);
-          bar.ontouchstart = (e) => startBarDrag(e, t, bar, st);
-          bar.ondblclick = () => openSubtaskModal(t.id, st.id);
-          bar.oncontextmenu = (e) => { e.preventDefault(); openSubtaskContext(e, t, st); };
+          bar.onmousedown = (e) => startBarDrag(e, t, bar, sb, st);
+          bar.ontouchstart = (e) => startBarDrag(e, t, bar, sb, st);
+          bar.ondblclick = () => openSubBarModal(t.id, st.id, sb.id);
+          bar.oncontextmenu = (e) => { e.preventDefault(); openSubBarContext(e, t, st, sb); };
           right.appendChild(bar);
         });
-      }
+      });
     } else if (r.kind === 'parent') {
       // 大項目：t.bars の各バーを独立した1区間として描画（材料搬入など1行に複数バー）
       (t.bars || []).forEach((b, bIdx) => {
@@ -1874,9 +1937,11 @@ function pointerXY(e) {
   return { x: e.clientX, y: e.clientY };
 }
 
-function startBarDrag(e, task, bar, subtask) {
-  // 4番目の引数 = 動かす対象。中項目(subtask)なら .name、親のバー(bar)なら .label を持つ。
-  const tgt = subtask || task;
+function startBarDrag(e, task, bar, mover, owner) {
+  // mover = 動かすバーデータ({start,end,label}) または工種。owner = 期間(min/max)を再計算する対象
+  // （親バーなら工種、中項目バーなら中項目）。owner未指定なら工種を使う。
+  const tgt = mover || task;
+  const envOwner = owner || task;
   // Detect mode: left edge, right edge, or move
   // セグメント描画では、最初/最後のセグメントだけに resize ハンドルがある。
   // 中間セグメントには .resize が無いので、必ず move 扱いにする。
@@ -1916,8 +1981,8 @@ function startBarDrag(e, task, bar, subtask) {
     const ei = indexFromDate(parseYMD(tgt.end)) + 1;
     bar.style.left = (si * dw) + 'px';
     bar.style.width = ((ei - si) * dw - 2) + 'px';
-    const _nm = (tgt.name !== undefined) ? tgt.name
-      : ((tgt.label && tgt.label.trim()) ? tgt.label : task.name);
+    const _nm = (tgt.label && tgt.label.trim()) ? tgt.label
+      : ((envOwner && envOwner.name) ? envOwner.name : task.name);
     bar.title = _nm + '\n' + tgt.start + ' 〜 ' + tgt.end;
   }
   function onUp() {
@@ -1927,7 +1992,7 @@ function startBarDrag(e, task, bar, subtask) {
     document.removeEventListener('mouseup', onUp);
     document.removeEventListener('touchmove', onMove);
     document.removeEventListener('touchend', onUp);
-    syncTaskEnvelope(task); // 親バーを動かしたら工種の期間(min/max)を更新
+    syncTaskEnvelope(envOwner); // バーを動かしたら所有者(工種/中項目)の期間(min/max)を更新
     saveState();
     render();
   }
@@ -2008,7 +2073,9 @@ function maybeStartCreateOnSubRow(e, task, subtask, rowMeta) {
   ghost.innerHTML = `<span class="bar-label">${escapeHtml(subtask.name)}</span>`;
   right.appendChild(ghost);
   let endIdx = startIdx;
+  let moved = false;
   function onMove(ev) {
+    moved = true;
     const x = pointerXY(ev).x - rect.left;
     endIdx = Math.max(0, Math.floor(x / dw));
     const lo = Math.min(startIdx, endIdx);
@@ -2021,13 +2088,14 @@ function maybeStartCreateOnSubRow(e, task, subtask, rowMeta) {
     document.removeEventListener('mouseup', onUp);
     document.removeEventListener('touchmove', onMove);
     document.removeEventListener('touchend', onUp);
+    ghost.remove();
+    if (!moved) return; // クリックしただけなら作らない（バーの誤作成を防ぐ）
     const lo = Math.min(startIdx, endIdx);
     const hi = Math.max(startIdx, endIdx);
-    if (hi - lo < 0) { ghost.remove(); return; }
     const newStart = ymdKey(dateFromIndex(lo));
     const newEnd = ymdKey(dateFromIndex(hi));
-    updateSubtask(currentProject().id, task.id, subtask.id, { start: newStart, end: newEnd });
-    ghost.remove();
+    // この中項目の行に新しいバーを1本追加する（同じ列に複数バー）
+    addSubBar(currentProject().id, task.id, subtask.id, { start: newStart, end: newEnd, label: '' });
     render();
   }
   document.addEventListener('mousemove', onMove);
@@ -2049,8 +2117,12 @@ function openSubtaskModal(taskId, subId) {
   editingSubCtx = { taskId, subId };
   document.getElementById('modal-task-title').textContent = '中項目: ' + t.name;
   document.getElementById('task-name').value = st.name;
-  document.getElementById('task-start').value = st.start;
-  document.getElementById('task-end').value = st.end;
+  // 日付欄は「最初のバー」を編集（複数バーの場合、他のバーはガント上でダブルクリック編集）
+  const _sb0 = (Array.isArray(st.bars) && st.bars[0]) ? st.bars[0] : null;
+  document.getElementById('task-start').value = _sb0 ? _sb0.start : (st.start || '');
+  document.getElementById('task-end').value = _sb0 ? _sb0.end : (st.end || '');
+  const _shint = document.getElementById('task-multibar-hint');
+  if (_shint) _shint.style.display = (Array.isArray(st.bars) && st.bars.length > 1) ? '' : 'none';
   document.getElementById('task-progress').value = 0;
   document.getElementById('task-progress-val').textContent = '—';
   document.getElementById('task-memo').value = st.memo || '';
@@ -2061,23 +2133,50 @@ function openSubtaskModal(taskId, subId) {
   setTimeout(() => document.getElementById('task-name').focus(), 50);
 }
 
-function openSubtaskContext(e, task, subtask) {
+// 中項目バーの右クリックメニュー（このバー単位＋中項目単位）
+function openSubBarContext(e, task, subtask, bar) {
   ctxMenu.innerHTML = '';
-  const items = [
-    { label: '編集...', fn: () => openSubtaskModal(task.id, subtask.id) },
-    { label: '削除', danger: true, fn: () => {
+  const items = [];
+  items.push({ label: 'このバーを編集...', fn: () => openSubBarModal(task.id, subtask.id, bar.id) });
+  items.push({ label: 'このバーを複製', fn: () => {
+      // 同じ長さで直後に複製（同じ列にもう1本素早く作る用）
+      let ns = bar.start, ne = bar.end;
+      const s = parseYMD(bar.start), en = parseYMD(bar.end);
+      if (s && en) {
+        const len = diffDays(s, en);
+        const nsD = addDays(en, 1);
+        ns = ymdKey(nsD);
+        ne = ymdKey(addDays(nsD, len));
+      }
+      addSubBar(currentProject().id, task.id, subtask.id, { start: ns, end: ne, label: bar.label || '' });
+      render();
+  } });
+  items.push({ label: 'このバーを削除', danger: true, fn: () => {
+      if (confirm('このバーを削除しますか？')) {
+        deleteSubBar(currentProject().id, task.id, subtask.id, bar.id);
+        render();
+      }
+  } });
+  items.push({ sep: true });
+  items.push({ label: '中項目を編集...', fn: () => openSubtaskModal(task.id, subtask.id) });
+  items.push({ label: '中項目を削除', danger: true, fn: () => {
       if (confirm(`「${subtask.name}」を削除しますか？`)) {
         deleteSubtask(currentProject().id, task.id, subtask.id);
         render();
       }
-    } },
-  ];
+  } });
   items.forEach(it => {
-    const el = document.createElement('div');
-    el.className = 'item' + (it.danger ? ' danger' : '');
-    el.textContent = it.label;
-    el.onclick = () => { closeCtx(); it.fn(); };
-    ctxMenu.appendChild(el);
+    if (it.sep) {
+      const s = document.createElement('div');
+      s.className = 'sep';
+      ctxMenu.appendChild(s);
+    } else {
+      const el = document.createElement('div');
+      el.className = 'item' + (it.danger ? ' danger' : '');
+      el.textContent = it.label;
+      el.onclick = () => { closeCtx(); it.fn(); };
+      ctxMenu.appendChild(el);
+    }
   });
   ctxMenu.style.left = e.clientX + 'px';
   ctxMenu.style.top = e.clientY + 'px';
@@ -2273,10 +2372,22 @@ document.getElementById('task-save').onclick = () => {
   if (editingSubCtx) {
     updateSubtask(p.id, editingSubCtx.taskId, editingSubCtx.subId, {
       name:  document.getElementById('task-name').value.trim() || '中項目',
-      start: document.getElementById('task-start').value,
-      end:   document.getElementById('task-end').value,
       memo:  document.getElementById('task-memo').value,
     });
+    // 日付は「最初のバー」に反映（無ければ作成）。他のバーは個別に編集。
+    const r = findSub(p.id, editingSubCtx.taskId, editingSubCtx.subId);
+    const ns = document.getElementById('task-start').value;
+    const ne = document.getElementById('task-end').value;
+    if (r && ns && ne) {
+      if (!Array.isArray(r.st.bars) || !r.st.bars.length) {
+        r.st.bars = [{ id: uid('b'), start: ns, end: ne, label: '' }];
+      } else {
+        r.st.bars[0].start = ns;
+        r.st.bars[0].end = ne;
+      }
+      syncTaskEnvelope(r.st);
+      saveState();
+    }
     closeModal('#modal-task');
     render();
     return;
@@ -2323,8 +2434,8 @@ document.getElementById('task-delete').onclick = () => {
   render();
 };
 
-// ===== バー編集モーダル（1工種の中の個々のバー） =====
-let editingBarCtx = null; // { taskId, barId }
+// ===== バー編集モーダル（工種/中項目の中の個々のバー） =====
+let editingBarCtx = null; // { taskId, barId } または { taskId, subId, barId }
 function openBarModal(taskId, barId) {
   const p = currentProject();
   if (!p) return;
@@ -2334,6 +2445,19 @@ function openBarModal(taskId, barId) {
   if (!b) return;
   editingBarCtx = { taskId, barId };
   document.getElementById('modal-bar-title').textContent = 'バー（' + t.name + '）';
+  document.getElementById('bar-label').value = b.label || '';
+  document.getElementById('bar-start').value = b.start || '';
+  document.getElementById('bar-end').value = b.end || '';
+  openModal('#modal-bar');
+  setTimeout(() => document.getElementById('bar-label').focus(), 50);
+}
+function openSubBarModal(taskId, subId, barId) {
+  const r = findSub(currentProject().id, taskId, subId);
+  if (!r) return;
+  const b = (r.st.bars || []).find(x => x.id === barId);
+  if (!b) return;
+  editingBarCtx = { taskId, subId, barId };
+  document.getElementById('modal-bar-title').textContent = 'バー（' + r.st.name + '）';
   document.getElementById('bar-label').value = b.label || '';
   document.getElementById('bar-start').value = b.start || '';
   document.getElementById('bar-end').value = b.end || '';
@@ -2350,14 +2474,22 @@ document.getElementById('bar-save').onclick = () => {
   const patch = { label: document.getElementById('bar-label').value.trim() };
   if (ns) patch.start = ns;
   if (ne) patch.end = ne;
-  updateBar(p.id, editingBarCtx.taskId, editingBarCtx.barId, patch);
+  if (editingBarCtx.subId) {
+    updateSubBar(p.id, editingBarCtx.taskId, editingBarCtx.subId, editingBarCtx.barId, patch);
+  } else {
+    updateBar(p.id, editingBarCtx.taskId, editingBarCtx.barId, patch);
+  }
   closeModal('#modal-bar');
   render();
 };
 document.getElementById('bar-delete').onclick = () => {
   if (!editingBarCtx) return;
   if (!confirm('このバーを削除しますか？')) return;
-  deleteBar(currentProject().id, editingBarCtx.taskId, editingBarCtx.barId);
+  if (editingBarCtx.subId) {
+    deleteSubBar(currentProject().id, editingBarCtx.taskId, editingBarCtx.subId, editingBarCtx.barId);
+  } else {
+    deleteBar(currentProject().id, editingBarCtx.taskId, editingBarCtx.barId);
+  }
   closeModal('#modal-bar');
   render();
 };
