@@ -2827,6 +2827,7 @@ async function saveAsPDF() {
   const _origWrapFlex = wrap.style.flex;
   const _origWrapHeight = wrap.style.height;
   const _origWrapOverflow = wrap.style.overflow;
+  const _origWrapWidth = wrap.style.width;
   try {
     // 必要時のみ CDN ロード（社内ネットワークでCDNブロックされている場合は失敗）
     await _loadScriptOnce('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
@@ -2840,6 +2841,21 @@ async function saveAsPDF() {
     wrap.style.flex = '0 0 auto';
     wrap.style.height = 'auto';
     wrap.style.overflow = 'visible';
+
+    // ガント本体(.gantt)は grid の右列が 1fr のため、wrap が画面幅のままだと
+    // チャート右側に大きな空白（＝PDFの右余白）ができる。実際に描画されている内容幅
+    // ＝左パネル幅(--left-col) + 日付セル合計幅(totalW) を測り、wrap をその幅に固定して余白を消す。
+    // 上下表示では段ごとに幅が違うので最も広い段に合わせる。
+    let contentW = 0;
+    wrap.querySelectorAll('.gantt').forEach(g => {
+      const leftCol = parseFloat(getComputedStyle(g).getPropertyValue('--left-col')) || 0;
+      let rightW = 0;
+      g.querySelectorAll('.head-day, .head-month, .bars-area').forEach(el => {
+        rightW = Math.max(rightW, el.offsetWidth);
+      });
+      contentW = Math.max(contentW, leftCol + rightW);
+    });
+    if (contentW > 0) wrap.style.width = Math.ceil(contentW) + 'px';
 
     // レイアウトが落ち着くまで待機
     await new Promise(r => setTimeout(r, 150));
@@ -2891,6 +2907,7 @@ async function saveAsPDF() {
     wrap.style.flex = _origWrapFlex;
     wrap.style.height = _origWrapHeight;
     wrap.style.overflow = _origWrapOverflow;
+    wrap.style.width = _origWrapWidth;
     if (printSetupApplied) window.dispatchEvent(new Event('afterprint'));
     btn.disabled = false;
     btn.textContent = origLabel;
