@@ -2828,6 +2828,7 @@ async function saveAsPDF() {
   const _origWrapHeight = wrap.style.height;
   const _origWrapOverflow = wrap.style.overflow;
   const _origWrapWidth = wrap.style.width;
+  const _fontRestores = []; // 名称列に収まらない工種名を一時的に縮小した分の復元用
   try {
     // 必要時のみ CDN ロード（社内ネットワークでCDNブロックされている場合は失敗）
     await _loadScriptOnce('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
@@ -2860,6 +2861,21 @@ async function saveAsPDF() {
     // レイアウトが落ち着くまで待機
     await new Promise(r => setTimeout(r, 150));
 
+    // 名称列に収まらない長い工種名は、収まるまでフォントを縮小（PDF内で末尾が切れないように）。
+    // ここで縮めた input のフォントは onclone の div にそのまま引き継がれ、finally で復元する。
+    wrap.querySelectorAll('.task-row input.name').forEach(el => {
+      if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) {
+        _fontRestores.push([el, el.style.fontSize]);
+        let size = parseFloat(getComputedStyle(el).fontSize) || 14;
+        let guard = 0;
+        while (el.scrollWidth > el.clientWidth + 1 && size > 8 && guard < 30) {
+          size -= 0.5;
+          el.style.fontSize = size + 'px';
+          guard++;
+        }
+      }
+    });
+
     // ガント部分の wrap 全体を target に。コンテンツの実寸を取得するため getBoundingClientRect も併用
     const target = wrap;
     const rect = target.getBoundingClientRect();
@@ -2876,6 +2892,31 @@ async function saveAsPDF() {
       scrollX: 0,
       scrollY: 0,
       useCORS: true,
+      // html2canvas は <input> のテキスト下部を切る（工種名・数量・単位が半分切れる）。
+      // 複製DOM内だけ、同じ見た目の静的divに置換して全文字を描画させる（画面のinputは無傷）。
+      onclone: (clonedDoc) => {
+        const win = clonedDoc.defaultView || window;
+        clonedDoc.querySelectorAll('input.name, input.qty, input.unit').forEach(el => {
+          const cs = win.getComputedStyle(el);
+          const div = clonedDoc.createElement('div');
+          const hasVal = el.value != null && el.value !== '';
+          div.textContent = hasVal ? el.value : (el.placeholder || '');
+          div.style.fontFamily = cs.fontFamily;
+          div.style.fontSize = cs.fontSize;
+          div.style.fontWeight = cs.fontWeight;
+          div.style.fontStyle = cs.fontStyle;
+          div.style.color = hasVal ? cs.color : '#999'; // 空欄はプレースホルダ相当の淡色
+          div.style.textAlign = cs.textAlign;
+          div.style.padding = cs.padding;
+          div.style.boxSizing = 'border-box';
+          div.style.whiteSpace = 'nowrap';
+          div.style.overflow = 'hidden';
+          div.style.textOverflow = 'ellipsis';
+          if (el.classList.contains('name')) { div.style.flex = '1'; div.style.minWidth = '0'; }
+          else { div.style.width = cs.width; div.style.flexShrink = '0'; }
+          el.parentNode.replaceChild(div, el);
+        });
+      },
     });
 
     const { jsPDF } = window.jspdf;
@@ -2903,6 +2944,8 @@ async function saveAsPDF() {
     console.error('[PDF] error:', e);
     alert('PDF生成に失敗しました。\n' + e.message + '\n\n代わりに「🖨 印刷」→「Microsoft Print to PDF」でもPDF保存できます。');
   } finally {
+    // 縮小した工種名フォントを元に戻す
+    _fontRestores.forEach(([el, prev]) => { el.style.fontSize = prev; });
     // wrap の元スタイルを必ず復元
     wrap.style.flex = _origWrapFlex;
     wrap.style.height = _origWrapHeight;
